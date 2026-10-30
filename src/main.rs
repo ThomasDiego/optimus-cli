@@ -1,7 +1,9 @@
 mod agent;
+mod cli;
 mod command;
 mod config;
 mod exec;
+mod headless;
 mod message;
 mod permission;
 mod provider;
@@ -17,13 +19,16 @@ use anyhow::{Context, Result, bail};
 use tokio::sync::mpsc;
 
 use crate::agent::Agent;
-use crate::permission::Mode;
 use crate::provider::OpenAiCompat;
 use crate::sandbox::Workspace;
 use crate::tools::Ctx;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    let args = cli::parse().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2);
+    });
     let cfg = config::load()?;
     let p = cfg.active()?;
     if p.kind != "openai_compat" {
@@ -36,7 +41,10 @@ async fn main() -> Result<()> {
     let header = format!("{} · {}", p.model, ws.root.display());
     let mut ctx = Ctx::new(ws, cfg.run_allow.clone());
     let (tx, mut events) = mpsc::unbounded_channel();
-    let mut agent = Agent::new(provider, tools::all(), tx, Mode::Ask);
+    let mut agent = Agent::new(provider, tools::all(), tx, args.mode);
+    if let Some(prompt) = args.prompt {
+        return headless::run(&mut agent, &mut ctx, &mut events, prompt).await;
+    }
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         match tui::run(&mut agent, &mut ctx, &mut events, p.model.clone()).await {
             // Terminals that cannot report the cursor get the line UI instead.

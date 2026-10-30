@@ -21,6 +21,9 @@ Verify changes by building or testing when possible. Be concise.";
 /// Hard stop against runaway tool loops.
 const MAX_STEPS: usize = 50;
 
+/// Stops retry loops: a denial is final for this request.
+const DENIED: &str = "not approved by the user or permission mode; do not retry, tell the user what you wanted to do";
+
 pub struct Agent<P> {
     provider: P,
     tools: Vec<Box<dyn Tool>>,
@@ -81,7 +84,7 @@ impl<P: Provider> Agent<P> {
                 let (path, diff) = (ch.rel.clone(), ch.diff());
                 if self.mode.get().needs_approval(Kind::Write) {
                     if !self.approve(Approval::Write { path, diff }).await {
-                        return Err("rejected by user".into());
+                        return Err(DENIED.into());
                     }
                 } else {
                     self.emit(Event::Diff { path, diff });
@@ -90,7 +93,7 @@ impl<P: Provider> Agent<P> {
             }
             Outcome::Exec(ex) => {
                 if self.mode.get().needs_approval(Kind::Exec) && !self.approve(Approval::Exec { cmd: ex.display() }).await {
-                    return Err("rejected by user".into());
+                    return Err(DENIED.into());
                 }
                 exec::run(&ex, &ctx.ws.root).await
             }
