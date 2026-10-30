@@ -1,11 +1,13 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
 
 use super::{Ctx, Outcome, Tool, capped, parse};
 use crate::message::ToolDef;
-use crate::sandbox::is_secret;
+use crate::sandbox::{TRASH, is_secret};
 
 const CAP: usize = 200;
 
@@ -21,7 +23,7 @@ impl Tool for ListDir {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "list_dir",
-            description: "Directory tree, dirs end with /. Respects .gitignore. Default depth 2.",
+            description: "Directory tree, dirs end with /. .gitignored entries are marked (ignored) and not expanded; give one as path to list it. Default depth 2.",
             schema: json!({
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "depth": {"type": "integer"}}
@@ -37,18 +39,28 @@ impl Tool for ListDir {
 }
 
 /// Indented tree; secrets are marked so the model does not try to read them.
+/// Ignored entries (node_modules, dist…) are listed and marked but never
+/// entered: hiding them made the model conclude they did not exist.
 pub fn tree(ctx: &Ctx, base: &Path, depth: usize, cap: usize) -> String {
-    let items: Vec<String> = ctx
-        .ws
-        .walker(base)
-        .max_depth(Some(depth))
+    let shown: Arc<HashSet<PathBuf>> = Arc::new(ctx.ws.walker(base).max_depth(Some(depth)).build().flatten().map(|e| e.into_path()).collect());
+    let visible = shown.clone();
+    let mut all = ctx.ws.walker(base);
+    all.standard_filters(false).max_depth(Some(depth)).filter_entry(move |e| {
+        let internal = e.file_name() == ".git" || e.file_name() == TRASH;
+        e.depth() == 0 || (!internal && e.path().parent().is_some_and(|p| visible.contains(p)))
+    });
+    let items: Vec<String> = all
         .build()
         .flatten()
         .filter(|e| e.depth() > 0)
         .map(|e| {
             let slash = if e.file_type().is_some_and(|t| t.is_dir()) { "/" } else { "" };
-            let secret = if is_secret(e.path()) { " (secret)" } else { "" };
-            format!("{}{}{slash}{secret}", "  ".repeat(e.depth() - 1), e.file_name().to_string_lossy())
+            let mark = match (is_secret(e.path()), shown.contains(e.path())) {
+                (true, _) => " (secret)",
+                (false, false) => " (ignored)",
+                _ => "",
+            };
+            format!("{}{}{slash}{mark}", "  ".repeat(e.depth() - 1), e.file_name().to_string_lossy())
         })
         .collect();
     if items.is_empty() { "(empty)".into() } else { capped(items, cap) }
@@ -65,5 +77,12 @@ mod tests {
         let mut c = ctx("ls", &[("src/a/deep.rs", ""), ("z.txt", ""), (".env", "")]);
         assert_eq!(call(&mut c, "list_dir", json!({})).unwrap(), ".env (secret)\nsrc/\n  a/\nz.txt");
         assert_eq!(call(&mut c, "list_dir", json!({"path": "src", "depth": 3})).unwrap(), "a/\n  deep.rs");
+
+        // Ignored entries exist for the model: listed once, not expanded.
+        std::fs::write(c.ws.root.join(".gitignore"), "node_modules/\n*.log\n").unwrap();
+        std::fs::create_dir_all(c.ws.root.join("node_modules/three")).unwrap();
+        std::fs::write(c.ws.root.join("debug.log"), "").unwrap();
+        let tree = call(&mut c, "list_dir", json!({})).unwrap();
+        assert_eq!(tree, ".env (secret)\n.gitignore\ndebug.log (ignored)\nnode_modules/ (ignored)\nsrc/\n  a/\nz.txt");
     }
 }

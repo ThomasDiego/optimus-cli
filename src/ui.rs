@@ -33,6 +33,21 @@ pub fn draft(name: &str, args: &str) -> String {
     }
 }
 
+/// One display line for a tool result, and whether it failed. A command that
+/// exited non-zero gets its first error line: "exit 128" alone says nothing.
+pub fn summary(ok: bool, output: &str) -> (String, bool) {
+    let first = output.lines().next().unwrap_or("").replace('\t', "  ");
+    let failed = !ok || (first.starts_with("exit ") && !first.starts_with("exit 0 ")) || first.starts_with("killed");
+    if !ok || !failed {
+        return (first, failed);
+    }
+    let body = output.split_once("[stderr]\n").or_else(|| output.split_once("[stdout]\n")).map_or("", |(_, b)| b);
+    match body.lines().map(str::trim).find(|l| !l.is_empty()) {
+        Some(reason) => (format!("{first} · {reason}"), true),
+        None => (first, true),
+    }
+}
+
 /// Added and removed lines of a unified diff, for one-line write summaries.
 pub fn stat(diff: &str) -> (usize, usize) {
     let count = |sign: &str, header: &str| diff.lines().filter(|l| l.starts_with(sign) && !l.starts_with(header)).count();
@@ -87,5 +102,13 @@ mod tests {
         assert_eq!(super::draft("write_file", r#"{"path":"src/a"#), "write_file src/a");
         assert_eq!(super::draft("run", r#"{"cmd":"npm","args":["run"#), "run npm");
         assert_eq!(super::draft("edit_file", r#"{"pa"#), "edit_file");
+    }
+
+    #[test]
+    fn failed_commands_show_their_reason() {
+        let out = "exit 128 0.0s\n[stderr]\nfatal: not a git repository\nmore";
+        assert_eq!(super::summary(true, out), ("exit 128 0.0s · fatal: not a git repository".into(), true));
+        assert_eq!(super::summary(true, "exit 0 0.1s\n[stdout]\nok"), ("exit 0 0.1s".into(), false));
+        assert_eq!(super::summary(false, "error: nope\nx"), ("error: nope".into(), true));
     }
 }

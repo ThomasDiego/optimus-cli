@@ -84,6 +84,10 @@ async fn session<P: Provider>(
         app.echo(&input);
         match command::handle(&input, agent, ctx) {
             Some(Cmd::Exit) => return Ok(()),
+            Some(Cmd::Clear) => {
+                app.clear();
+                continue;
+            }
             Some(Cmd::Say(s)) => {
                 app.say(&s, false);
                 app.end_turn();

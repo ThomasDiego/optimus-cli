@@ -14,7 +14,7 @@ use crate::message::Usage;
 use crate::permission::Mode;
 use crate::agent::DENIED;
 use crate::tools::truncate;
-use crate::ui::{Approval, Event, brief, stat};
+use crate::ui::{Approval, Event, brief, stat, summary};
 
 const DIFF_LINES: usize = 60;
 const THINKING: &str = "Thinking";
@@ -123,8 +123,8 @@ impl App {
                     return self.out.push(Line::from(spans));
                 }
                 // The model-facing refusal text is long; the user only needs the fact.
-                let first = if output.strip_prefix("error: ") == Some(DENIED) { "denied".into() } else { output.lines().next().unwrap_or("").replace('\t', "  ") };
-                let style = if ok { dim() } else { Style::new().fg(Color::Red) };
+                let (first, failed) = if output.strip_prefix("error: ") == Some(DENIED) { ("denied".into(), true) } else { summary(ok, &output) };
+                let style = if failed { Style::new().fg(Color::Red) } else { dim() };
                 self.out.push(Line::styled(format!("  ⎿ {}", truncate(&first, 120)), style));
             }
             // The user did not ask to review it: a line count is enough.
@@ -369,6 +369,16 @@ impl App {
             let prefix = if i == 0 { "› " } else { "  " };
             self.out.push(Line::styled(format!("{prefix}{l}"), Style::new().add_modifier(Modifier::BOLD)));
         }
+    }
+
+    /// Blank screen for a fresh conversation; session cost totals stay.
+    pub fn clear(&mut self) {
+        self.out = Transcript::default();
+        self.partial.clear();
+        self.pending.clear();
+        self.md.reset();
+        self.context = 0;
+        self.stat = None;
     }
 
     pub fn say(&mut self, msg: &str, error: bool) {

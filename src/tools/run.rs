@@ -29,6 +29,21 @@ const INLINE_CODE_FLAGS: &[(&str, &[&str])] = &[
     ("bun", &["-e", "--eval"]),
 ];
 
+/// Shell habits and the tool that does the job: a direct pointer saves the
+/// model from guessing (or scripting around the refusal).
+const SHELL_TOOLS: &[(&str, &str)] = &[
+    ("ls tree", "list_dir"),
+    ("cat head tail less", "read_file"),
+    ("grep rg ag", "grep"),
+    ("find fd", "glob"),
+    ("rm rmdir", "delete_file"),
+    ("mv", "move_file"),
+    ("cp touch mkdir echo tee sed awk", "write_file or edit_file (parent dirs are created)"),
+    ("curl wget", "web_fetch"),
+    ("git", "git"),
+    ("kill pkill ps", "process"),
+];
+
 pub struct Run;
 
 #[derive(Deserialize)]
@@ -82,6 +97,9 @@ impl Tool for Run {
         if a.cmd.contains(char::is_whitespace) {
             return Err("cmd is the program name only; put arguments in args".into());
         }
+        if let Some((_, tool)) = SHELL_TOOLS.iter().find(|(cmd, _)| cmd.split(' ').any(|c| c == a.cmd)) {
+            return Err(format!("no shell commands; use the {tool} tool"));
+        }
         if a.cmd.contains('/') || !ctx.run_allow.contains(&a.cmd) {
             return Err(format!("{} not allowed; allowed: {}", a.cmd, ctx.run_allow.join(", ")));
         }
@@ -109,6 +127,8 @@ mod tests {
         assert_eq!(call(&mut c, "run", json!({"cmd": "cargo", "args": ["test"]})).unwrap(), r#"exec cargo ["test"]"#);
         assert!(call(&mut c, "run", json!({"cmd": "cargo test"})).unwrap_err().contains("put arguments in args"));
         assert!(call(&mut c, "run", json!({"cmd": "bash"})).unwrap_err().contains("not allowed; allowed: cargo"));
+        assert_eq!(call(&mut c, "run", json!({"cmd": "ls"})).unwrap_err(), "no shell commands; use the list_dir tool");
+        assert!(call(&mut c, "run", json!({"cmd": "curl"})).unwrap_err().ends_with("web_fetch tool"));
         assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).is_err());
         assert!(call(&mut c, "run", json!({"cmd": "cargo", "dir": ".."})).is_err());
     }

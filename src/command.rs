@@ -6,6 +6,8 @@ use crate::tools::{Ctx, change};
 pub enum Action {
     Exit,
     Say(String),
+    /// The conversation was reset: the UI starts from a blank screen too.
+    Clear,
 }
 
 const COMMANDS: &[(&str, &str)] = &[
@@ -84,7 +86,7 @@ pub fn handle<P: Provider>(input: &str, agent: &mut Agent<P>, ctx: &mut Ctx) -> 
         "clear" => {
             agent.clear();
             ctx.reads.clear();
-            Action::Say("conversation cleared".into())
+            Action::Clear
         }
         _ => Action::Say("/undo  /mode [ask|edit|auto]  /clear  /exit".into()),
     })

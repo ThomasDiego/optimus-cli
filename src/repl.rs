@@ -8,7 +8,7 @@ use crate::command::{self, Action};
 use crate::message::{kilo, money};
 use crate::provider::Provider;
 use crate::tools::{Ctx, truncate};
-use crate::ui::{Approval, Event, brief, stat};
+use crate::ui::{Approval, Event, brief, stat, summary};
 
 const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
@@ -34,6 +34,10 @@ pub async fn run<P: Provider>(
         }
         match command::handle(input, agent, ctx) {
             Some(Action::Exit) => break,
+            Some(Action::Clear) => {
+                println!("{DIM}conversation cleared{RESET}");
+                continue;
+            }
             Some(Action::Say(s)) => {
                 println!("{DIM}{s}{RESET}");
                 continue;
@@ -71,8 +75,8 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
         Event::Usage(_) | Event::Drafting { .. } => {}
         Event::ToolCall(call) => println!("\n{DIM}› {}{RESET}", brief(&call)),
         Event::ToolResult { ok, output } => {
-            let first = truncate(output.lines().next().unwrap_or(""), 100);
-            println!("{}  {first}{RESET}", if ok { DIM } else { RED });
+            let (first, failed) = summary(ok, &output);
+            println!("{}  {}{RESET}", if failed { RED } else { DIM }, truncate(&first, 100));
         }
         Event::Diff { diff, .. } => {
             let (add, del) = stat(&diff);
