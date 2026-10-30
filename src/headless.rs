@@ -67,8 +67,11 @@ fn show(ev: Event, flow: &mut Flow) {
             eprintln!("  {}{}", if ok { "" } else { "✗ " }, truncate(&first, 120));
         }
         Event::Diff { diff, .. } => {
+            // Moves and deletions have no line diff: their result line says it all.
             let (add, del) = stat(&diff);
-            eprintln!("  +{add} -{del}");
+            if (add, del) != (0, 0) {
+                eprintln!("  +{add} -{del}");
+            }
         }
         Event::Approve { req, reply } => {
             let _ = reply.send(false);

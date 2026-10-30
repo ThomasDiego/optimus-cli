@@ -56,7 +56,7 @@ impl Tool for Glob {
             .filter(|e| e.path().strip_prefix(&base).is_ok_and(|p| glob.is_match(p)))
             .map(|e| {
                 let mtime = e.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(UNIX_EPOCH);
-                let secret = if is_secret(e.path()) { " (secret)" } else { "" };
+                let secret = if is_secret(e.path()) { " (secret, unreadable)" } else { "" };
                 (mtime, format!("{}{secret}", ctx.ws.display(e.path())))
             })
             .collect();
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(call(&mut c, "glob", json!({"pattern": "**/*.rs"})).unwrap(), "src/a.rs");
         assert_eq!(call(&mut c, "glob", json!({"pattern": "*.zz"})).unwrap(), "no match");
         std::fs::write(c.ws.root.join(".env"), "S=1").unwrap();
-        assert_eq!(call(&mut c, "glob", json!({"pattern": ".env*"})).unwrap(), ".env (secret)");
+        assert_eq!(call(&mut c, "glob", json!({"pattern": ".env*"})).unwrap(), ".env (secret, unreadable)");
 
         // Ignored dirs stay out of broad searches but can be targeted.
         std::fs::write(c.ws.root.join(".gitignore"), "target/\nnode_modules/\n").unwrap();

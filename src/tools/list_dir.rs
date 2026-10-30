@@ -55,9 +55,11 @@ pub fn tree(ctx: &Ctx, base: &Path, depth: usize, cap: usize) -> String {
         .filter(|e| e.depth() > 0)
         .map(|e| {
             let slash = if e.file_type().is_some_and(|t| t.is_dir()) { "/" } else { "" };
-            let mark = match (is_secret(e.path()), shown.contains(e.path())) {
-                (true, _) => " (secret)",
-                (false, false) => " (ignored)",
+            let outside = e.path_is_symlink() && std::fs::canonicalize(e.path()).map_or(true, |r| !r.starts_with(&ctx.ws.root));
+            let mark = match (is_secret(e.path()), outside, shown.contains(e.path())) {
+                (true, ..) => " (secret, unreadable)",
+                (_, true, _) => " (link outside project, unreachable)",
+                (_, _, false) => " (ignored)",
                 _ => "",
             };
             format!("{}{}{slash}{mark}", "  ".repeat(e.depth() - 1), e.file_name().to_string_lossy())
@@ -75,7 +77,7 @@ mod tests {
     #[test]
     fn tree_with_depth() {
         let mut c = ctx("ls", &[("src/a/deep.rs", ""), ("z.txt", ""), (".env", "")]);
-        assert_eq!(call(&mut c, "list_dir", json!({})).unwrap(), ".env (secret)\nsrc/\n  a/\nz.txt");
+        assert_eq!(call(&mut c, "list_dir", json!({})).unwrap(), ".env (secret, unreadable)\nsrc/\n  a/\nz.txt");
         assert_eq!(call(&mut c, "list_dir", json!({"path": "src", "depth": 3})).unwrap(), "a/\n  deep.rs");
 
         // Ignored entries exist for the model: listed once, not expanded.
@@ -83,6 +85,13 @@ mod tests {
         std::fs::create_dir_all(c.ws.root.join("node_modules/three")).unwrap();
         std::fs::write(c.ws.root.join("debug.log"), "").unwrap();
         let tree = call(&mut c, "list_dir", json!({})).unwrap();
-        assert_eq!(tree, ".env (secret)\n.gitignore\ndebug.log (ignored)\nnode_modules/ (ignored)\nsrc/\n  a/\nz.txt");
+        assert_eq!(tree, ".env (secret, unreadable)\n.gitignore\ndebug.log (ignored)\nnode_modules/ (ignored)\nsrc/\n  a/\nz.txt");
+
+        // A link leading out is named as such, here and when used.
+        std::os::unix::fs::symlink("/etc/hosts", c.ws.root.join("src/hosts")).unwrap();
+        assert_eq!(call(&mut c, "list_dir", json!({"path": "src", "depth": 1})).unwrap(), "a/\nhosts (link outside project, unreachable)");
+        let err = call(&mut c, "read_file", json!({"path": "src/hosts"})).unwrap_err();
+        assert_eq!(err, "src/hosts: symlink to outside the project, not reachable");
+        assert_eq!(call(&mut c, "read_file", json!({"path": "../x"})).unwrap_err(), "../x: outside project");
     }
 }
