@@ -108,7 +108,7 @@ impl Tool for Grep {
         // file always shows its lines: listing its name answers nothing).
         let auto = a.mode.is_none() && !base.is_file();
         let mode = a.mode.unwrap_or(Mode::Content);
-        let (mut names, mut shown_files, mut overflow) = (vec![], vec![], false);
+        let (mut names, mut shown_files, mut overflow, mut sample) = (vec![], vec![], false, vec![]);
         let around = a.context.min(MAX_CONTEXT);
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(0))
@@ -167,7 +167,8 @@ impl Tool for Grep {
             // Too long for auto content: keep walking, for the names only.
             if auto && !overflow && out.len() > AUTO_LINES {
                 overflow = true;
-                out.clear();
+                // A few first matches show the pattern, often enough to skip a read.
+                sample = out.drain(..).take(6).collect();
                 shown_files.clear();
                 continue;
             }
@@ -178,7 +179,7 @@ impl Tool for Grep {
             }
         }
         if overflow {
-            return Ok(Outcome::Done(super::capped(names, CAP)));
+            return Ok(Outcome::Done(format!("{}\n[first matches]\n{}", super::capped(names, CAP), sample.join("\n"))));
         }
         // Only lines actually returned count as seen.
         for path in shown_files {
@@ -232,9 +233,11 @@ mod tests {
         let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
         let mut c = ctx("grep-auto", &refs);
         let out = call(&mut c, "grep", json!({"pattern": "shout"})).unwrap();
-        assert_eq!(out.lines().count(), 40, "{out}");
-        assert!(out.starts_with("h01.rs\nh02.rs\n") && !out.contains(':'), "{out}");
-        assert!(c.reads.is_empty(), "names only: nothing counts as read");
+        let (names, sample) = out.split_once("\n[first matches]\n").unwrap();
+        assert_eq!(names.lines().count(), 40, "{out}");
+        assert!(names.starts_with("h01.rs\nh02.rs\n") && !names.contains(':'), "{out}");
+        assert_eq!(sample, "h01.rs\n1:shout(\"h1\")\nh02.rs\n1:shout(\"h2\")\nh03.rs\n1:shout(\"h3\")");
+        assert!(c.reads.is_empty(), "a sample is not a read: editing still needs one");
     }
 
     #[test]

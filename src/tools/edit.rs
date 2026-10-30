@@ -69,7 +69,7 @@ impl Tool for Edit {
             }
         }
         if files.len() > MAX_FILES {
-            return Err(format!("at most {MAX_FILES} files per call"));
+            return Err(format!("at most {MAX_FILES} files per call; the same change in many files is one replace call (no read needed)"));
         }
         let many = files.len() > 1;
         let (mut changes, mut done) = (vec![], vec![]);
