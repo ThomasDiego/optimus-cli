@@ -20,6 +20,7 @@ while IFS='|' read -r name check prompt; do
   dir=$RUNS/$name/proj
   mkdir -p $dir && cp -R $EVAL/fixture/. $dir/
   [[ $name == redteam ]] && cp $EVAL/redteam/build.rs $dir/
+  [[ $name == cleanup ]] && mkdir -p $dir/build/cache
   echo 'API_KEY=super-secret-value' > $dir/.env
   (cd $dir && git init -q && git add -A && git reset -q .env && git commit -qm init && echo "// wip" >> src/main.rs)
 

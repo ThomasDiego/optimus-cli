@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -8,8 +11,12 @@ use crate::message::ToolDef;
 /// Moves or renames a file; the destination must not exist.
 pub struct Move;
 
-/// Deletes a file. Both are undoable: the old content is snapshotted.
+/// Deletes files and empty directories. Both are undoable: old content is snapshotted.
 pub struct Delete;
+
+/// Paths per delete call, and entries scanned to prove a directory is empty.
+const MAX_PATHS: usize = 50;
+const MAX_SCAN: usize = 1000;
 
 #[derive(Deserialize)]
 struct MoveArgs {
@@ -19,7 +26,9 @@ struct MoveArgs {
 
 #[derive(Deserialize)]
 struct DeleteArgs {
-    path: String,
+    path: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
 }
 
 impl Tool for Move {
@@ -43,8 +52,8 @@ impl Tool for Move {
         }
         let bytes = file::read_bytes(ctx, &from, &a.from)?;
         let changes = vec![
-            Change { rel: to, old: None, new: Some(bytes.clone()) },
-            Change { rel: from, old: Some(bytes), new: None },
+            Change { rel: to, old: None, new: Some(bytes.clone()), dir: false },
+            Change { rel: from, old: Some(bytes), new: None, dir: false },
         ];
         // The model did not author this content: it must read before editing.
         Ok(Outcome::Write(Batch { changes, ok: format!("moved {} → {}", a.from, a.to), known: false }))
@@ -55,21 +64,65 @@ impl Tool for Delete {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "delete_file",
-            description: "Delete a file (not a directory). Undoable by the user.",
+            description: "Delete files, or directories holding no files. All or nothing; undoable by the user.",
             schema: json!({
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"]
+                "properties": {
+                    "path": {"type": "string"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "several at once"}
+                }
             }),
         }
     }
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: DeleteArgs = parse(args)?;
-        let rel = ctx.ws.rel_write(&a.path)?;
-        let bytes = file::read_bytes(ctx, &rel, &a.path)?;
-        Ok(Outcome::Write(Batch::single(rel, Some(bytes), None, format!("deleted {}", a.path))))
+        let mut list: Vec<String> = a.path.into_iter().chain(a.paths).collect();
+        list.sort();
+        list.dedup();
+        if list.is_empty() || list.len() > MAX_PATHS {
+            return Err(format!("give path or 1 to {MAX_PATHS} paths"));
+        }
+        let (mut files, mut dirs) = (vec![], vec![]);
+        for p in &list {
+            let rel = ctx.ws.rel_write(p)?;
+            if rel == Path::new(".") {
+                return Err("the project root cannot be deleted".into());
+            }
+            match ctx.ws.dir.symlink_metadata(&rel).map_err(|e| file::io_err(p, e))?.is_dir() {
+                true => dirs.push(rel),
+                false => files.push(Change { old: Some(file::read_bytes(ctx, &rel, p)?), rel, new: None, dir: false }),
+            }
+        }
+        // Files first, so a directory emptied by this same call can go too.
+        let pending: HashSet<PathBuf> = files.iter().map(|c| c.rel.clone()).collect();
+        let mut budget = MAX_SCAN;
+        for rel in dirs {
+            empty_dirs(ctx, &rel, &pending, &mut files, &mut budget)?;
+        }
+        let ok = format!("deleted {}", list.join(", "));
+        Ok(Outcome::Write(Batch { changes: files, ok, known: true }))
     }
+}
+
+/// Collects `rel` and its subdirectories, deepest first. Fails on the first
+/// file not deleted by this call: only directories left empty can be removed.
+fn empty_dirs(ctx: &Ctx, rel: &Path, pending: &HashSet<PathBuf>, out: &mut Vec<Change>, budget: &mut usize) -> Result<(), String> {
+    let shown = rel.display().to_string();
+    for entry in ctx.ws.dir.read_dir(rel).map_err(|e| file::io_err(&shown, e))? {
+        let entry = entry.map_err(|e| file::io_err(&shown, e))?;
+        *budget = budget.checked_sub(1).ok_or_else(|| format!("{shown}: too many entries to check"))?;
+        let child = rel.join(entry.file_name());
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            empty_dirs(ctx, &child, pending, out, budget)?;
+        } else if !pending.contains(&child) {
+            return Err(format!("{shown}: not empty, contains {}", child.display()));
+        }
+    }
+    if !out.iter().any(|c| c.rel == rel) {
+        out.push(Change { rel: rel.to_path_buf(), old: Some(vec![]), new: None, dir: true });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -101,9 +154,34 @@ mod tests {
     fn guards_destination_dirs_secrets_and_git() {
         let mut c = ctx("fsops-guard", &[("a.txt", "a"), ("b.txt", "b"), ("d/x.txt", "x"), (".env", "S=1")]);
         assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": "b.txt"})).unwrap_err().contains("exists"));
-        assert!(call(&mut c, "delete_file", json!({"path": "d"})).unwrap_err().contains("directory"));
+        assert_eq!(call(&mut c, "delete_file", json!({"path": "d"})).unwrap_err(), "d: not empty, contains d/x.txt");
         assert!(call(&mut c, "move_file", json!({"from": ".env", "to": "leak.txt"})).is_err());
         assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": ".git/hooks/pre-commit"})).is_err());
         assert!(call(&mut c, "delete_file", json!({"path": "../outside"})).is_err());
+        assert!(call(&mut c, "delete_file", json!({"path": "."})).unwrap_err().contains("root"));
+        assert!(call(&mut c, "delete_file", json!({"paths": [".env"]})).is_err());
+    }
+
+    #[test]
+    fn deletes_many_and_empty_dirs_atomically() {
+        let mut c = ctx("fsops-many", &[("a.txt", "a"), ("b.txt", "b"), ("d/x.txt", "x"), ("full/keep.txt", "k")]);
+        let root = c.ws.root.clone();
+        std::fs::create_dir_all(root.join("empty/nested/deeper")).unwrap();
+        change::begin_turn(&mut c);
+
+        // A directory emptied by the same call can be removed with its files.
+        let ok = call(&mut c, "delete_file", json!({"paths": ["a.txt", "b.txt", "d/x.txt", "d", "empty"]})).unwrap();
+        assert_eq!(ok, "deleted a.txt, b.txt, d, d/x.txt, empty");
+        assert!(!root.join("a.txt").exists() && !root.join("d").exists() && !root.join("empty").exists());
+
+        // A directory with a file left is refused, and nothing else is deleted.
+        std::fs::write(root.join("c.txt"), "c").unwrap();
+        assert!(call(&mut c, "delete_file", json!({"paths": ["c.txt", "full"]})).unwrap_err().contains("not empty"));
+        assert!(root.join("c.txt").exists() && root.join("full/keep.txt").exists());
+
+        change::begin_turn(&mut c);
+        change::undo(&mut c).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("d/x.txt")).unwrap(), "x");
+        assert!(root.join("a.txt").exists() && root.join("empty/nested/deeper").is_dir());
     }
 }

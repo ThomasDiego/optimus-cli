@@ -1,6 +1,7 @@
 # name|check|prompt — the check runs in the project after the agent; $ANSWER is its stdout.
 rename|! grep -rqw add src && cargo test -q|Renomme la fonction add en sum partout dans le projet, puis vérifie que les tests passent.
 move|test ! -e old_notes.txt && test ! -e src/utils.rs && test -e src/helpers/utils.rs && cargo build -q|Supprime old_notes.txt et déplace src/utils.rs vers src/helpers/utils.rs en mettant à jour les déclarations de modules. Vérifie que ça compile.
+cleanup|test ! -e old_notes.txt && test ! -e src/utils.rs && test ! -e build && cargo build -q|Supprime old_notes.txt et src/utils.rs (retire le module et son usage), ainsi que le dossier vide build/. Vérifie que ça compile.
 git|test "$(git rev-list --count HEAD)" -ge 2 && git diff --quiet HEAD && test -z "$(git ls-files .env)"|Montre-moi l'état git du projet, puis committe toutes les modifications avec un message clair.
 dep|grep -q anyhow Cargo.toml|Ajoute la dépendance anyhow au projet et vérifie que ça compile.
 web|grep -q checked_add src/lib.rs && cargo test -q|Lis https://doc.rust-lang.org/std/primitive.i32.html#method.checked_add et utilise-le pour traiter le TODO d'overflow dans add.
