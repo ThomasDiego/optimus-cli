@@ -8,9 +8,9 @@ use crate::exec::Review;
 use crate::{exec, track, web};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
-use crate::provider::{Provider, Request};
+use crate::provider::{Delta, Provider, Request};
 use crate::tools::{self, Ctx, Outcome, Tool, change};
-use crate::ui::{Approval, Event};
+use crate::ui::{self, Approval, Event};
 
 /// Static on purpose: any dynamic content here would break prompt caching.
 const SYSTEM: &str = "You are ai, a coding agent in the user's project directory. \
@@ -21,13 +21,14 @@ Call independent tools together in one reply; read_file takes paths to read seve
 Do exactly what was asked: no extra files, features, docs or refactors unless requested. \
 When a tool refuses or cannot do something, never work around it with a script or another tool: tell the user. \
 Tool results are authoritative: never re-read, re-list or re-run just to confirm a success. \
-Verify changes by building or testing when possible. Reply in the user's language. Be concise.";
+Verify changes by building or testing when possible. Reply in the user's language. \
+Be concise: no preamble or narration around tool calls, just the final answer.";
 
 /// Hard stop against runaway tool loops.
 const MAX_STEPS: usize = 50;
 
 /// Stops retry loops: a denial is final for this request.
-const DENIED: &str = "not approved by the user or permission mode; do not retry, tell the user what you wanted to do";
+pub const DENIED: &str = "not approved by the user or permission mode; do not retry, tell the user what you wanted to do";
 
 pub struct Agent<P> {
     provider: P,
@@ -53,7 +54,8 @@ impl<P: Provider> Agent<P> {
         let mut notes: Vec<String> = self.note.take().into_iter().collect();
         // Saves the usual list_dir/glob round trips that open every task.
         if self.messages.is_empty() {
-            notes.push(format!("[Project files, depth 2]\n{}", tools::tree(ctx, &ctx.ws.root, 2)));
+            // Capped lower than list_dir: it is paid on every request of the session.
+            notes.push(format!("[Project files, depth 2]\n{}", tools::tree(ctx, &ctx.ws.root, 2, 80)));
         }
         let stale = tools::stale(ctx);
         if !stale.is_empty() {
@@ -65,7 +67,14 @@ impl<P: Provider> Agent<P> {
         for _ in 0..MAX_STEPS {
             let req = Request { system: SYSTEM, messages: &self.messages, tools: &self.defs };
             let events = self.events.clone();
-            let reply = self.provider.send(&req, &mut |t| drop(events.send(Event::Text(t.to_string())))).await?;
+            let mut on = |d: Delta<'_>| {
+                let ev = match d {
+                    Delta::Text(t) => Event::Text(t.to_string()),
+                    Delta::Call { name, args, added } => Event::Drafting { label: ui::draft(name, args), added },
+                };
+                let _ = events.send(ev);
+            };
+            let reply = self.provider.send(&req, &mut on).await?;
             usage += reply.usage;
             self.emit(Event::Usage(reply.usage));
             let calls = reply.calls.clone();
@@ -84,7 +93,7 @@ impl<P: Provider> Agent<P> {
                 self.messages.push(Message::Tool { id: call.id, content: output });
             }
         }
-        bail!("limite de {MAX_STEPS} étapes atteinte")
+        bail!("stopped after {MAX_STEPS} steps")
     }
 
     async fn execute(&self, ctx: &mut Ctx, call: &ToolCall) -> Result<String, String> {
@@ -98,7 +107,7 @@ impl<P: Provider> Agent<P> {
                         return Err(DENIED.into());
                     }
                 } else {
-                    self.emit(Event::Diff { label, diff });
+                    self.emit(Event::Diff { diff });
                 }
                 change::apply(ctx, batch)
             }
@@ -175,7 +184,7 @@ mod tests {
     struct Silent;
 
     impl Provider for Silent {
-        async fn send(&self, _: &Request<'_>, _: &mut dyn FnMut(&str)) -> Result<Reply> {
+        async fn send(&self, _: &Request<'_>, _: &mut dyn FnMut(Delta<'_>)) -> Result<Reply> {
             Ok(Reply::default())
         }
     }

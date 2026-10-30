@@ -12,10 +12,12 @@ use super::transcript::Transcript;
 use crate::command::{self, Suggestion};
 use crate::message::Usage;
 use crate::permission::Mode;
+use crate::agent::DENIED;
 use crate::tools::truncate;
-use crate::ui::{Approval, Event, brief};
+use crate::ui::{Approval, Event, brief, stat};
 
 const DIFF_LINES: usize = 60;
+const THINKING: &str = "Thinking";
 
 pub enum Action {
     None,
@@ -44,6 +46,8 @@ pub struct App {
     pub activity: String,
     /// Lines added/removed by an unprompted write, shown on its result line.
     stat: Option<(usize, usize)>,
+    /// Characters received in the current request, until its usage arrives.
+    pub streamed: usize,
     pub started: Instant,
     pub approval: Option<(String, oneshot::Sender<bool>)>,
     pub usage: Usage,
@@ -57,12 +61,6 @@ pub struct App {
 
 fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
-}
-
-/// Added and removed lines of a unified diff.
-fn stat(diff: &str) -> (usize, usize) {
-    let count = |sign: &str, header: &str| diff.lines().filter(|l| l.starts_with(sign) && !l.starts_with(header)).count();
-    (count("+", "+++"), count("-", "---"))
 }
 
 impl App {
@@ -80,6 +78,7 @@ impl App {
             busy: false,
             activity: String::new(),
             stat: None,
+            streamed: 0,
             started: Instant::now(),
             approval: None,
             usage: Usage::default(),
@@ -92,43 +91,53 @@ impl App {
 
     pub fn on_agent(&mut self, ev: Event) {
         match ev {
-            Event::Text(t) => return self.pending.push_str(&t),
+            Event::Text(t) => {
+                self.streamed += t.len();
+                return self.pending.push_str(&t);
+            }
+            // Shows what the model is writing before the call completes.
+            Event::Drafting { label, added } => {
+                self.streamed += added;
+                return self.activity = label;
+            }
             Event::Usage(u) => {
                 self.context = u.input + u.output;
+                self.streamed = 0;
                 return self.usage += u;
             }
             // Anything else must appear after the text that preceded it.
             _ => self.reveal_all(),
         }
         match ev {
-            Event::Text(_) | Event::Usage(_) => {}
+            Event::Text(_) | Event::Drafting { .. } | Event::Usage(_) => {}
             Event::ToolCall(call) => {
                 self.flush_partial();
                 self.activity = brief(&call);
                 self.out.push(Line::styled(format!("● {}", self.activity), dim()));
             }
             Event::ToolResult { ok, output } => {
-                self.activity = "Réflexion".into();
+                self.activity = THINKING.into();
                 if let Some((add, del)) = self.stat.take().filter(|&s| ok && s != (0, 0)) {
                     let (add, del) = (format!("+{add}"), format!("-{del}"));
                     let spans = vec![Span::styled("  ⎿ ", dim()), Span::styled(add, Color::Green), Span::raw(" "), Span::styled(del, Color::Red)];
                     return self.out.push(Line::from(spans));
                 }
-                let first = truncate(output.lines().next().unwrap_or(""), 120).replace('\t', "  ");
+                // The model-facing refusal text is long; the user only needs the fact.
+                let first = if output.strip_prefix("error: ") == Some(DENIED) { "denied".into() } else { output.lines().next().unwrap_or("").replace('\t', "  ") };
                 let style = if ok { dim() } else { Style::new().fg(Color::Red) };
-                self.out.push(Line::styled(format!("  ⎿ {first}"), style));
+                self.out.push(Line::styled(format!("  ⎿ {}", truncate(&first, 120)), style));
             }
             // The user did not ask to review it: a line count is enough.
             Event::Diff { diff, .. } => self.stat = Some(stat(&diff)),
             Event::Approve { req, reply } => {
                 self.flush_partial();
                 let prompt = match req {
-                    Approval::Write { label, diff } => {
-                        self.push_diff(&label, &diff);
-                        "Appliquer ? (o/n)".to_string()
+                    Approval::Write { diff, .. } => {
+                        self.push_diff(&diff);
+                        "Apply? (y/n)".to_string()
                     }
-                    Approval::Exec { cmd, .. } => format!("Exécuter « {cmd} » ? (o/n)"),
-                    Approval::Fetch { url } => format!("Lire « {url} » ? (o/n)"),
+                    Approval::Exec { cmd, .. } => format!("Run `{cmd}`? (y/n)"),
+                    Approval::Fetch { url } => format!("Fetch {url}? (y/n)"),
                 };
                 self.approval = Some((prompt, reply));
             }
@@ -159,7 +168,7 @@ impl App {
         if self.approval.is_some() {
             match k.code {
                 KeyCode::Char('c') if ctrl => return Action::Cancel,
-                KeyCode::Char('o' | 'O' | 'y' | 'Y') | KeyCode::Enter => self.answer(true),
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => self.answer(true),
                 KeyCode::Char('n' | 'N') | KeyCode::Esc => self.answer(false),
                 _ => {}
             }
@@ -249,10 +258,10 @@ impl App {
         Action::None
     }
 
+    /// The tool's result line follows and tells the outcome ("denied" or its output).
     fn answer(&mut self, yes: bool) {
         if let Some((_, reply)) = self.approval.take() {
             let _ = reply.send(yes);
-            self.out.push(Line::styled(if yes { "  ✓ autorisé" } else { "  ✗ refusé" }, dim()));
         }
     }
 
@@ -287,8 +296,8 @@ impl App {
         self.input[self.cursor..].chars().next().map(|c| self.cursor + c.len_utf8())
     }
 
-    fn push_diff(&mut self, path: &str, diff: &str) {
-        self.out.push(Line::styled(path.to_string(), Style::new().add_modifier(Modifier::BOLD)));
+    /// Indented under the tool call it belongs to, which already names the files.
+    fn push_diff(&mut self, diff: &str) {
         let lines: Vec<&str> = diff.lines().collect();
         for line in lines.iter().take(DIFF_LINES) {
             let style = match line.as_bytes().first() {
@@ -297,10 +306,10 @@ impl App {
                 Some(b'@') => dim(),
                 _ => Style::new(),
             };
-            self.out.push(Line::styled(line.to_string(), style));
+            self.out.push(Line::styled(format!("    {line}"), style));
         }
         if lines.len() > DIFF_LINES {
-            self.out.push(Line::styled(format!("… {} lignes de plus", lines.len() - DIFF_LINES), dim()));
+            self.out.push(Line::styled(format!("    … {} more lines", lines.len() - DIFF_LINES), dim()));
         }
     }
 
@@ -335,7 +344,7 @@ impl App {
     pub fn start_turn(&mut self) {
         self.busy = true;
         self.started = Instant::now();
-        self.activity = "Réflexion".into();
+        self.activity = THINKING.into();
     }
 
     pub fn flush_partial(&mut self) {
@@ -372,7 +381,7 @@ impl App {
 mod tests {
     #[test]
     fn counts_diff_lines_without_headers() {
-        assert_eq!(super::stat("--- a\n+++ b\n@@ -1 +1,2 @@\n-x\n+y\n+z\n ctx\n"), (2, 1));
-        assert_eq!(super::stat("(binary)"), (0, 0));
+        assert_eq!(crate::ui::stat("--- a\n+++ b\n@@ -1 +1,2 @@\n-x\n+y\n+z\n ctx\n"), (2, 1));
+        assert_eq!(crate::ui::stat("(binary)"), (0, 0));
     }
 }

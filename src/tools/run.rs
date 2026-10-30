@@ -70,7 +70,7 @@ impl Tool for Run {
                     "dir": {"type": "string", "description": "working dir, default root"},
                     "timeout": {"type": "integer", "description": "seconds, default 120"},
                     "net": {"type": "boolean", "description": "network access (downloads); user must approve"},
-                    "background": {"type": "boolean", "description": "for dev servers, watchers and long jobs (minutes): returns early output; follow with process output+wait"}
+                    "background": {"type": "boolean", "description": "for dev servers, watchers and long jobs (minutes): returns the job id and early output (a server printing its URL is up, no need to probe it); follow with process output+wait"}
                 },
                 "required": ["cmd"]
             }),

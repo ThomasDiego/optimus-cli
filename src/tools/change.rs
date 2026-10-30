@@ -71,18 +71,18 @@ impl Change {
     fn diff(&self) -> String {
         let rel = self.rel.display();
         match (&self.kind, &self.new) {
-            (Kind::Tree { files, .. }, _) => format!("supprimé : {rel}/ ({files} fichiers, annulable)"),
-            (Kind::Dir, _) => format!("supprimé : {rel}/ (vide)"),
+            (Kind::Tree { files, .. }, _) => format!("deleted {rel}/ ({files} files, undoable)"),
+            (Kind::Dir, _) => format!("deleted {rel}/ (empty)"),
             // A deleted file's content tells the user nothing: its size does.
             (Kind::File, None) => {
                 let lines = self.old.as_deref().map_or(0, |b| String::from_utf8_lossy(b).lines().count());
-                format!("supprimé : {rel} ({lines} lignes)")
+                format!("deleted {rel} ({lines} lines)")
             }
             (Kind::File, Some(_)) => {
                 let text = |b: &Option<Vec<u8>>| std::str::from_utf8(b.as_deref().unwrap_or(b"")).map(str::to_string).ok();
                 match (text(&self.old), text(&self.new)) {
                     (Some(old), Some(new)) => TextDiff::from_lines(&old, &new).unified_diff().context_radius(2).to_string(),
-                    _ => "(binaire)".into(),
+                    _ => "(binary)".into(),
                 }
             }
         }

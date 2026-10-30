@@ -137,7 +137,7 @@ async fn session<P: Provider>(
             Some(Err(e)) => app.say(&format!("{e:#}"), true),
             None => {
                 agent.heal();
-                app.say("interrompu", true);
+                app.say("interrupted", true);
             }
         }
         app.end_turn();

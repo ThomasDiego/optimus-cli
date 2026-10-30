@@ -46,7 +46,7 @@ impl Config {
     pub fn active(&self) -> Result<&ProviderConfig> {
         self.providers
             .get(&self.provider)
-            .with_context(|| format!("provider « {} » absent de la config", self.provider))
+            .with_context(|| format!("provider \"{}\" is not in the config", self.provider))
     }
 }
 

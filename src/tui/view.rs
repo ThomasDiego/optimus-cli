@@ -56,7 +56,9 @@ fn live_line(app: &App) -> Line<'static> {
     let ms = app.started.elapsed().as_millis() as usize;
     let mut spans = vec![Span::styled(format!(" {} ", SPINNER[(ms / (STEP_MS * 2)) % SPINNER.len()]), Style::new().fg(ACCENT))];
     spans.extend(shimmer(&app.activity, ms));
-    spans.push(Span::styled(format!("  {}s", ms / 1000), dim()));
+    // Live estimate (~4 chars per token) until the request reports real usage.
+    let tokens = if app.streamed > 0 { format!(" · ↓{}", kilo(app.streamed as u64 / 4)) } else { String::new() };
+    spans.push(Span::styled(format!("  {}s{tokens}", ms / 1000), dim()));
     Line::from(spans)
 }
 
@@ -101,7 +103,11 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         vec![],
     ];
     let mode_label = format!(" {}", mode.name());
-    let jobs = if app.jobs > 0 { format!(" · {} en fond", app.jobs) } else { String::new() };
+    let jobs = match app.jobs {
+        0 => String::new(),
+        1 => " · 1 job".into(),
+        n => format!(" · {n} jobs"),
+    };
     let used = mode_label.chars().count() + jobs.chars().count();
     let rest = candidates
         .iter()
@@ -118,7 +124,7 @@ mod tests {
 
     #[test]
     fn shimmer_keeps_text() {
-        let text: String = shimmer("Réflexion", 300).iter().map(|s| s.content.to_string()).collect();
-        assert_eq!(text, "Réflexion");
+        let text: String = shimmer("Thinking…", 300).iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "Thinking…");
     }
 }

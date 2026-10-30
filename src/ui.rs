@@ -10,10 +10,33 @@ pub enum Event {
     /// Tokens and cost of one model request, for live accounting.
     Usage(Usage),
     ToolCall(ToolCall),
+    /// A tool call still being generated: what it targets so far, and how
+    /// many characters just arrived (for the live token count).
+    Drafting { label: String, added: usize },
     ToolResult { ok: bool, output: String },
     /// Files were written without confirmation; shown to the user only.
-    Diff { label: String, diff: String },
+    Diff { diff: String },
     Approve { req: Approval, reply: oneshot::Sender<bool> },
+}
+
+/// `write_file src/a.rs` from a call whose JSON arguments are still
+/// streaming. Only the head is scanned: the target comes before the content.
+pub fn draft(name: &str, args: &str) -> String {
+    let head = &args[..args.floor_char_boundary(300)];
+    let target = ["path", "cmd", "url", "from", "pattern", "op"].iter().find_map(|k| {
+        let rest = head.split_once(&format!("\"{k}\":"))?.1.trim_start().strip_prefix('"')?;
+        Some(rest.split_once('"').map_or(rest, |(v, _)| v))
+    });
+    match target {
+        Some(t) => format!("{name} {t}"),
+        None => name.to_string(),
+    }
+}
+
+/// Added and removed lines of a unified diff, for one-line write summaries.
+pub fn stat(diff: &str) -> (usize, usize) {
+    let count = |sign: &str, header: &str| diff.lines().filter(|l| l.starts_with(sign) && !l.starts_with(header)).count();
+    (count("+", "+++"), count("-", "---"))
 }
 
 pub enum Approval {
@@ -32,7 +55,7 @@ pub fn brief(call: &ToolCall) -> String {
         "run" => s("cmd").map(|c| {
             let rest = args["args"].as_array().into_iter().flatten().filter_map(Value::as_str);
             let cmd = std::iter::once(c.as_str()).chain(rest).collect::<Vec<_>>().join(" ");
-            if args["background"] == true { format!("{cmd} (en fond)") } else { cmd }
+            if args["background"] == true { format!("{cmd} (background)") } else { cmd }
         }),
         "process" => s("op").map(|op| args["id"].as_u64().map_or(op.clone(), |id| format!("{op} {id}"))),
         "glob" | "grep" => s("pattern").map(|p| match s("path") {
@@ -53,5 +76,16 @@ pub fn brief(call: &ToolCall) -> String {
     match detail {
         Some(d) => format!("{} {}", call.name, truncate(&d, 100)),
         None => call.name.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn drafts_name_the_target_while_streaming() {
+        assert_eq!(super::draft("write_file", r#"{"path": "src/a.rs", "content": "fn"#), "write_file src/a.rs");
+        assert_eq!(super::draft("write_file", r#"{"path":"src/a"#), "write_file src/a");
+        assert_eq!(super::draft("run", r#"{"cmd":"npm","args":["run"#), "run npm");
+        assert_eq!(super::draft("edit_file", r#"{"pa"#), "edit_file");
     }
 }

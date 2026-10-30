@@ -32,12 +32,12 @@ impl Tool for ListDir {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let base = ctx.ws.walk_base(a.path.as_deref())?;
-        Ok(Outcome::Done(tree(ctx, &base, a.depth.unwrap_or(2).clamp(1, 10))))
+        Ok(Outcome::Done(tree(ctx, &base, a.depth.unwrap_or(2).clamp(1, 10), CAP)))
     }
 }
 
 /// Indented tree; secrets are marked so the model does not try to read them.
-pub fn tree(ctx: &Ctx, base: &Path, depth: usize) -> String {
+pub fn tree(ctx: &Ctx, base: &Path, depth: usize, cap: usize) -> String {
     let items: Vec<String> = ctx
         .ws
         .walker(base)
@@ -51,7 +51,7 @@ pub fn tree(ctx: &Ctx, base: &Path, depth: usize) -> String {
             format!("{}{}{slash}{secret}", "  ".repeat(e.depth() - 1), e.file_name().to_string_lossy())
         })
         .collect();
-    if items.is_empty() { "(empty)".into() } else { capped(items, CAP) }
+    if items.is_empty() { "(empty)".into() } else { capped(items, cap) }
 }
 
 #[cfg(test)]

@@ -9,16 +9,16 @@ pub enum Action {
 }
 
 const COMMANDS: &[(&str, &str)] = &[
-    ("undo", "annuler les dernières modifications"),
+    ("undo", "revert the last changes"),
     ("mode", "ask · edit · auto"),
-    ("clear", "vider la conversation"),
-    ("exit", "quitter"),
+    ("clear", "clear the conversation"),
+    ("exit", "quit"),
 ];
 
 const MODES: &[(&str, &str)] = &[
-    ("ask", "tout confirmer"),
-    ("edit", "éditions automatiques, commandes confirmées"),
-    ("auto", "rien à confirmer"),
+    ("ask", "confirm everything"),
+    ("edit", "apply edits, confirm commands"),
+    ("auto", "confirm network only"),
 ];
 
 pub struct Suggestion {
@@ -75,7 +75,7 @@ pub fn handle<P: Provider>(input: &str, agent: &mut Agent<P>, ctx: &mut Ctx) -> 
                 None => agent.mode.get().next(),
                 Some(m) => match Mode::parse(m) {
                     Some(m) => m,
-                    None => return Some(Action::Say("modes : ask, edit, auto".into())),
+                    None => return Some(Action::Say("modes: ask, edit, auto".into())),
                 },
             };
             agent.mode.set(mode);
@@ -84,7 +84,7 @@ pub fn handle<P: Provider>(input: &str, agent: &mut Agent<P>, ctx: &mut Ctx) -> 
         "clear" => {
             agent.clear();
             ctx.reads.clear();
-            Action::Say("conversation vidée".into())
+            Action::Say("conversation cleared".into())
         }
         _ => Action::Say("/undo  /mode [ask|edit|auto]  /clear  /exit".into()),
     })
@@ -92,11 +92,11 @@ pub fn handle<P: Provider>(input: &str, agent: &mut Agent<P>, ctx: &mut Ctx) -> 
 
 fn undo<P: Provider>(agent: &mut Agent<P>, ctx: &mut Ctx) -> String {
     match change::undo(ctx) {
-        Ok(files) if files.is_empty() => "rien à annuler".into(),
+        Ok(files) if files.is_empty() => "nothing to undo".into(),
         Ok(files) => {
             let list = files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
             agent.note(format!("[The user reverted your last changes to: {list}. Re-read before editing.]"));
-            format!("annulé : {list}")
+            format!("reverted: {list}")
         }
         Err(e) => e,
     }
