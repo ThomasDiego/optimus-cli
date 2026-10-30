@@ -92,7 +92,9 @@ fn render(lines: &[&str], start: usize, end: usize, total: usize) -> String {
     for (i, line) in lines[start - 1..end].iter().enumerate() {
         let _ = writeln!(out, "{}\t{}", start + i, file::truncate(line, MAX_LINE));
     }
-    if start > 1 || end < total {
+    if total > MAX_LIMIT && end < total {
+        let _ = write!(out, "[{start}-{end}/{total}; too long to page: grep it, or compute over it with python3 -c]");
+    } else if start > 1 || end < total {
         let _ = write!(out, "[{start}-{end}/{total}]");
     }
     out

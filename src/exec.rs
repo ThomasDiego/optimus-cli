@@ -82,7 +82,7 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
     Ok(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr))
 }
 
-/// Starts the sandboxed command in its own process group, output piped.
+/// Starts the sandboxed command in its own session, output piped.
 /// Dropping the `Group` kills it and everything it spawned.
 pub fn spawn(ex: &Exec, root: &Path) -> Result<(Child, Group), String> {
     let mut cmd = command(ex, root);
@@ -91,17 +91,21 @@ pub fn spawn(ex: &Exec, root: &Path) -> Result<(Child, Group), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .process_group(0);
+        .kill_on_drop(true);
     for k in KEEP_ENV {
         if let Some(v) = std::env::var_os(k) {
             cmd.env(k, v);
         }
     }
     cmd.envs(ex.env.iter().copied());
-    // SAFETY: only async-signal-safe setrlimit calls between fork and exec.
+    // SAFETY: only async-signal-safe setsid/setrlimit calls between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
+            // New session, hence new process group and no controlling
+            // terminal: /dev/tty is unreachable, prompts read end-of-input.
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             for (res, v) in [(libc::RLIMIT_CPU, CPU_SECS), (libc::RLIMIT_FSIZE, MAX_FILE), (libc::RLIMIT_CORE, 0)] {
                 libc::setrlimit(res, &libc::rlimit { rlim_cur: v, rlim_max: v });
             }
@@ -189,6 +193,15 @@ mod tests {
         let long: String = (1..=100).map(|i| format!("{i}\n")).collect();
         let clipped = clip(&long);
         assert!(clipped.contains("15\n[40 lines cut]\n56"));
+    }
+
+    /// Prompts get end-of-input instead of hanging on, or typing into, the
+    /// user's terminal.
+    #[tokio::test]
+    async fn no_terminal_to_prompt_on() {
+        let root = crate::sandbox::tests::temp("exec-tty").canonicalize().unwrap();
+        let out = run(&exec("/bin/sh", &["-c", "read x; echo got=$?; : < /dev/tty && echo TTY"], &root, 5), &root).await.unwrap();
+        assert!(out.contains("got=1") && !out.contains("TTY"), "{out}");
     }
 
     #[tokio::test]
