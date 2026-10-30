@@ -5,13 +5,15 @@ pub enum Mode {
     Ask,
     /// Writes are automatic, commands are confirmed.
     Edit,
-    /// Nothing is confirmed (commands stay OS-sandboxed).
+    /// Nothing is confirmed except network access (commands stay OS-sandboxed).
     Auto,
 }
 
 pub enum Kind {
     Write,
     Exec,
+    /// A command with network access: the only way data can leave the machine.
+    ExecNet,
 }
 
 impl Mode {
@@ -19,6 +21,7 @@ impl Mode {
         match kind {
             Kind::Write => self == Mode::Ask,
             Kind::Exec => self != Mode::Auto,
+            Kind::ExecNet => true,
         }
     }
 

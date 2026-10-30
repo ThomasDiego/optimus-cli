@@ -4,7 +4,7 @@ use std::rc::Rc;
 use anyhow::{Result, bail};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::exec;
+use crate::{exec, track};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
 use crate::provider::{Provider, Request};
@@ -92,10 +92,13 @@ impl<P: Provider> Agent<P> {
                 change::apply(ctx, ch)
             }
             Outcome::Exec(ex) => {
-                if self.mode.get().needs_approval(Kind::Exec) && !self.approve(Approval::Exec { cmd: ex.display() }).await {
+                let kind = if ex.net { Kind::ExecNet } else { Kind::Exec };
+                if self.mode.get().needs_approval(kind) && !self.approve(Approval::Exec { cmd: ex.display(), net: ex.net }).await {
                     return Err(DENIED.into());
                 }
-                exec::run(&ex, &ctx.ws.root).await
+                let before = track::snapshot(&ctx.ws);
+                let out = exec::run(&ex, &ctx.ws.root).await?;
+                Ok(track::annotate(out, &track::changes(&before, &track::snapshot(&ctx.ws))))
             }
         }
     }

@@ -21,6 +21,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "libc",
  "ratatui",
  "reqwest",
  "serde",

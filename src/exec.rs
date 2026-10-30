@@ -13,12 +13,15 @@ pub struct Exec {
     pub args: Vec<String>,
     pub dir: PathBuf,
     pub timeout: Duration,
+    /// Network access, granted only after explicit user approval.
+    pub net: bool,
 }
 
 impl Exec {
     pub fn display(&self) -> String {
         let quote = |a: &String| if a.contains(char::is_whitespace) { format!("{a:?}") } else { a.clone() };
-        std::iter::once(&self.program).chain(&self.args).map(quote).collect::<Vec<_>>().join(" ")
+        let cmd = std::iter::once(&self.program).chain(&self.args).map(quote).collect::<Vec<_>>().join(" ");
+        if self.net { format!("{cmd} [réseau]") } else { cmd }
     }
 }
 
@@ -26,35 +29,25 @@ impl Exec {
 const KEEP_ENV: &[&str] = &["PATH", "HOME", "USER", "LANG", "TMPDIR"];
 const HEAD: usize = 15;
 const TAIL: usize = 45;
+/// Per-process limits: CPU seconds, largest file written.
+const CPU_SECS: libc::rlim_t = 900;
+const MAX_FILE: libc::rlim_t = 2 << 30;
 
-/// Kernel sandbox: writes only in the project, temp dirs and package caches;
-/// no reads of credentials or `.env` files. `.git` stays read-only.
+/// Kernel sandbox, see the profile for the exact rules.
 #[cfg(target_os = "macos")]
-const PROFILE: &str = r#"(version 1)
-(allow default)
-(deny file-write*)
-(allow file-write*
-  (subpath (param "ROOT"))
-  (subpath (param "TMP"))
-  (subpath "/private/tmp")
-  (subpath "/dev")
-  (subpath (string-append (param "HOME") "/.cargo/registry"))
-  (subpath (string-append (param "HOME") "/.cargo/git"))
-  (subpath (string-append (param "HOME") "/.npm"))
-  (subpath (string-append (param "HOME") "/.cache"))
-  (subpath (string-append (param "HOME") "/Library/Caches")))
-(deny file-write* (subpath (string-append (param "ROOT") "/.git")))
-(deny file-read*
-  (subpath (string-append (param "HOME") "/.ssh"))
-  (subpath (string-append (param "HOME") "/.aws"))
-  (subpath (string-append (param "HOME") "/.gnupg"))
-  (subpath (string-append (param "HOME") "/.config"))
-  (literal (string-append (param "HOME") "/.netrc"))
-  (regex #"/\.env$")
-  (regex #"/\.env\.[^/]*$"))
-(allow file-read* (regex #"/\.env\.(example|sample|template)$"))"#;
+const PROFILE: &str = include_str!("seatbelt.sb");
 
-/// Runs without a shell, with a cleared environment and a timeout.
+/// Kills the whole process group, so nothing a command spawned survives it.
+struct Group(libc::pid_t);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        // SAFETY: plain syscall on a group we created; errors (already gone) are ignored.
+        unsafe { libc::killpg(self.0, libc::SIGKILL) };
+    }
+}
+
+/// Runs without a shell, with a cleared environment, resource limits and a timeout.
 pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
     let mut cmd = command(ex, root);
     cmd.current_dir(&ex.dir)
@@ -62,15 +55,26 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        .process_group(0);
     for k in KEEP_ENV {
         if let Some(v) = std::env::var_os(k) {
             cmd.env(k, v);
         }
     }
+    // SAFETY: only async-signal-safe setrlimit calls between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            for (res, v) in [(libc::RLIMIT_CPU, CPU_SECS), (libc::RLIMIT_FSIZE, MAX_FILE), (libc::RLIMIT_CORE, 0)] {
+                libc::setrlimit(res, &libc::rlimit { rlim_cur: v, rlim_max: v });
+            }
+            Ok(())
+        });
+    }
     let start = Instant::now();
     let child = cmd.spawn().map_err(|e| format!("{}: {e}", ex.program))?;
-    // On timeout or cancel the child is dropped, which kills it.
+    let _group = child.id().map(|pid| Group(pid as libc::pid_t));
+    // On timeout, cancel or exit, `_group` kills every remaining process.
     let out = match tokio::time::timeout(ex.timeout, child.wait_with_output()).await {
         Ok(r) => r.map_err(|e| format!("{}: {e}", ex.program))?,
         Err(_) => return Err(format!("timeout after {}s, process killed", ex.timeout.as_secs())),
@@ -84,8 +88,9 @@ fn command(ex: &Exec, root: &Path) -> Command {
     let tmp = std::env::temp_dir().canonicalize().unwrap_or_else(|_| "/private/tmp".into());
     // Per-user temp is .../T; its parent also holds the per-user cache (C).
     let tmp = if tmp.ends_with("T") { tmp.parent().map(Path::to_path_buf).unwrap_or(tmp) } else { tmp };
+    let net = Path::new(if ex.net { "1" } else { "0" });
     let mut c = Command::new("/usr/bin/sandbox-exec");
-    for (k, v) in [("ROOT", root), ("HOME", home.as_path()), ("TMP", tmp.as_path())] {
+    for (k, v) in [("ROOT", root), ("HOME", home.as_path()), ("TMP", tmp.as_path()), ("NET", net)] {
         let mut def = OsString::from(format!("{k}="));
         def.push(v);
         c.arg("-D").arg(def);
@@ -130,7 +135,17 @@ mod tests {
 
     fn exec(program: &str, args: &[&str], dir: &Path, secs: u64) -> Exec {
         let args = args.iter().map(|s| s.to_string()).collect();
-        Exec { program: program.into(), args, dir: dir.into(), timeout: Duration::from_secs(secs) }
+        Exec { program: program.into(), args, dir: dir.into(), timeout: Duration::from_secs(secs), net: false }
+    }
+
+    #[tokio::test]
+    async fn background_children_die_with_the_command() {
+        let root = crate::sandbox::tests::temp("exec-group").canonicalize().unwrap();
+        let out = run(&exec("/bin/sh", &["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], &root, 5), &root).await.unwrap();
+        let pid: libc::pid_t = out.lines().last().unwrap().trim().parse().unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // SAFETY: signal 0 only checks whether the process exists.
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "background child survived");
     }
 
     #[tokio::test]
@@ -168,5 +183,12 @@ mod tests {
 
         let env = run(&exec("/bin/cat", &[".env"], &root, 5), &root).await.unwrap();
         assert!(!env.contains("KEY=1"), "{env}");
+
+        let home_list = run(&exec("/bin/ls", &[home.to_str().unwrap()], &root, 5), &root).await.unwrap();
+        assert!(!home_list.starts_with("exit 0"), "HOME readable: {home_list}");
+
+        let curl = ["-sS", "-m", "5", "-o", "/dev/null", "https://example.com"];
+        let offline = run(&exec("/usr/bin/curl", &curl, &root, 10), &root).await.unwrap();
+        assert!(!offline.starts_with("exit 0"), "network reachable: {offline}");
     }
 }

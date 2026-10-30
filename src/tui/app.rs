@@ -45,6 +45,8 @@ pub struct App {
     pub started: Instant,
     pub approval: Option<(String, oneshot::Sender<bool>)>,
     pub usage: Usage,
+    /// Tokens of the latest request: the current conversation size.
+    pub context: u64,
     pub mode: Rc<Cell<Mode>>,
     pub model: String,
 }
@@ -70,6 +72,7 @@ impl App {
             started: Instant::now(),
             approval: None,
             usage: Usage::default(),
+            context: 0,
             mode,
             model,
         }
@@ -78,7 +81,10 @@ impl App {
     pub fn on_agent(&mut self, ev: Event) {
         match ev {
             Event::Text(t) => return self.pending.push_str(&t),
-            Event::Usage(u) => return self.usage += u,
+            Event::Usage(u) => {
+                self.context = u.input + u.output;
+                return self.usage += u;
+            }
             // Anything else must appear after the text that preceded it.
             _ => self.reveal_all(),
         }
@@ -103,7 +109,7 @@ impl App {
                         self.push_diff(&path.display().to_string(), &diff);
                         "Appliquer ? (o/n)".to_string()
                     }
-                    Approval::Exec { cmd } => format!("Exécuter « {cmd} » ? (o/n)"),
+                    Approval::Exec { cmd, .. } => format!("Exécuter « {cmd} » ? (o/n)"),
                 };
                 self.approval = Some((prompt, reply));
             }
