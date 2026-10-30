@@ -2,8 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 use similar::{DiffTag, TextDiff};
 
-use super::change::Change as Pending;
-use super::{Ctx, Outcome, Tool, file, matching, parse};
+use super::{Batch, Ctx, Outcome, Tool, file, matching, parse};
 use crate::message::ToolDef;
 
 pub struct Edit;
@@ -62,7 +61,7 @@ impl Tool for Edit {
             return Err("no change".into());
         }
         let ok = summary(&current, &updated);
-        Ok(Outcome::Write(Pending { rel, old: Some(current), new: updated, ok }))
+        Ok(Outcome::Write(Batch::single(rel, Some(current.into_bytes()), Some(updated.into_bytes()), ok)))
     }
 }
 

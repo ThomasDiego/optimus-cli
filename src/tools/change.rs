@@ -7,51 +7,112 @@ use super::{Ctx, FileState, file};
 /// Undo history depth, in turns.
 const MAX_TURNS: usize = 20;
 
-/// A file write prepared by a tool, applied by the agent once permitted.
+/// One file going from `old` to `new`; `None` means absent.
 pub struct Change {
     pub rel: PathBuf,
-    pub old: Option<String>,
-    pub new: String,
+    pub old: Option<Vec<u8>>,
+    pub new: Option<Vec<u8>>,
+}
+
+/// Changes prepared by a tool, applied all or nothing once permitted
+/// (a move is a create plus a delete).
+pub struct Batch {
+    pub changes: Vec<Change>,
     /// Message returned to the model on success.
     pub ok: String,
+    /// The model authored the new content, so it may edit it without re-reading.
+    pub known: bool,
 }
 
 /// File content before the first change of a turn.
 pub struct Snapshot {
     rel: PathBuf,
-    old: Option<String>,
+    old: Option<Vec<u8>>,
+}
+
+impl Batch {
+    pub fn single(rel: PathBuf, old: Option<Vec<u8>>, new: Option<Vec<u8>>, ok: String) -> Self {
+        Self { changes: vec![Change { rel, old, new }], ok, known: true }
+    }
+
+    /// What the user is asked about: `src/a.rs` or `a.rs → b.rs`.
+    pub fn label(&self) -> String {
+        match self.changes.as_slice() {
+            [to, from] if to.old.is_none() && from.new.is_none() && to.new == from.old => {
+                format!("{} → {}", from.rel.display(), to.rel.display())
+            }
+            changes => changes.iter().map(|c| c.rel.display().to_string()).collect::<Vec<_>>().join(", "),
+        }
+    }
+
+    /// Unified diff for the user only; never sent to the model.
+    pub fn diff(&self) -> String {
+        if self.label().contains(" → ") {
+            return String::new();
+        }
+        self.changes.iter().map(Change::diff).collect::<Vec<_>>().join("\n")
+    }
 }
 
 impl Change {
-    /// Unified diff for the user only; never sent to the model.
-    pub fn diff(&self) -> String {
-        TextDiff::from_lines(self.old.as_deref().unwrap_or(""), &self.new)
-            .unified_diff()
-            .context_radius(2)
-            .to_string()
+    fn diff(&self) -> String {
+        let text = |b: &Option<Vec<u8>>| std::str::from_utf8(b.as_deref().unwrap_or(b"")).map(str::to_string).ok();
+        match (text(&self.old), text(&self.new)) {
+            (Some(old), Some(new)) => TextDiff::from_lines(&old, &new).unified_diff().context_radius(2).to_string(),
+            _ => "(binary)".into(),
+        }
     }
 }
 
-/// The single write path: re-checks freshness, snapshots, writes atomically.
-pub fn apply(ctx: &mut Ctx, ch: Change) -> Result<String, String> {
+/// The single write path: re-checks every file, snapshots, then writes
+/// atomically; a failure midway rolls back what was already written.
+pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
+    for ch in &batch.changes {
+        // The user may have edited the file while the approval prompt was open.
+        if current(ctx, ch)? != ch.old {
+            return Err(format!("{}: changed before write, read it again", ch.rel.display()));
+        }
+    }
+    for (i, ch) in batch.changes.iter().enumerate() {
+        if let Err(e) = put(ctx, &ch.rel, ch.new.as_deref()) {
+            for done in batch.changes[..i].iter().rev() {
+                let _ = put(ctx, &done.rel, done.old.as_deref());
+            }
+            return Err(e);
+        }
+    }
+    for ch in batch.changes {
+        if let Some(turn) = ctx.undo.last_mut()
+            && !turn.iter().any(|s| s.rel == ch.rel)
+        {
+            turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old });
+        }
+        match ch.new {
+            Some(new) if batch.known => {
+                ctx.reads.insert(ch.rel, FileState { hash: file::hash(&new), ranges: vec![] });
+            }
+            _ => {
+                ctx.reads.remove(&ch.rel);
+            }
+        }
+    }
+    Ok(batch.ok)
+}
+
+fn current(ctx: &Ctx, ch: &Change) -> Result<Option<Vec<u8>>, String> {
     let shown = ch.rel.display().to_string();
-    let current = match ctx.ws.dir.try_exists(&ch.rel).map_err(|e| file::io_err(&shown, e))? {
-        true => Some(file::read_text(ctx, &ch.rel, &shown)?),
-        false => None,
-    };
-    // The user may have edited the file while the approval prompt was open.
-    if current != ch.old {
-        return Err(format!("{shown}: changed before write, read it again"));
+    match ctx.ws.dir.try_exists(&ch.rel).map_err(|e| file::io_err(&shown, e))? {
+        true => file::read_bytes(ctx, &ch.rel, &shown).map(Some),
+        false => Ok(None),
     }
-    if let Some(turn) = ctx.undo.last_mut()
-        && !turn.iter().any(|s| s.rel == ch.rel)
-    {
-        turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old });
+}
+
+fn put(ctx: &Ctx, rel: &std::path::Path, data: Option<&[u8]>) -> Result<(), String> {
+    match data {
+        Some(d) => file::write_atomic(&ctx.ws.dir, rel, d),
+        None => ctx.ws.dir.remove_file(rel),
     }
-    file::write_atomic(&ctx.ws.dir, &ch.rel, &ch.new).map_err(|e| file::io_err(&shown, e))?;
-    // The model knows what it wrote: no re-read needed before the next edit.
-    ctx.reads.insert(ch.rel, FileState { hash: file::hash(&ch.new), ranges: vec![] });
-    Ok(ch.ok)
+    .map_err(|e| file::io_err(&rel.display().to_string(), e))
 }
 
 /// Opens a new undo group for the coming turn.
@@ -73,12 +134,7 @@ pub fn undo(ctx: &mut Ctx) -> Result<Vec<PathBuf>, String> {
     let Some(turn) = ctx.undo.pop() else { return Ok(vec![]) };
     let mut restored = vec![];
     for s in turn.into_iter().rev() {
-        let shown = s.rel.display().to_string();
-        match &s.old {
-            Some(old) => file::write_atomic(&ctx.ws.dir, &s.rel, old),
-            None => ctx.ws.dir.remove_file(&s.rel),
-        }
-        .map_err(|e| file::io_err(&shown, e))?;
+        put(ctx, &s.rel, s.old.as_deref())?;
         // Forces a re-read: the model's view of this file is now stale.
         ctx.reads.remove(&s.rel);
         restored.push(s.rel);
@@ -115,8 +171,24 @@ mod tests {
     #[test]
     fn refuses_write_if_file_changed_meanwhile() {
         let mut c = ctx("race", &[("a.txt", "one")]);
-        let ch = Change { rel: "a.txt".into(), old: Some("one".into()), new: "two".into(), ok: "ok".into() };
+        let batch = Batch::single("a.txt".into(), Some(b"one".to_vec()), Some(b"two".to_vec()), "ok".into());
         std::fs::write(c.ws.root.join("a.txt"), "user edit").unwrap();
-        assert!(apply(&mut c, ch).unwrap_err().contains("changed before write"));
+        assert!(apply(&mut c, batch).unwrap_err().contains("changed before write"));
+    }
+
+    #[test]
+    fn failed_batch_rolls_back() {
+        let mut c = ctx("rollback", &[("a.txt", "a")]);
+        let batch = Batch {
+            changes: vec![
+                Change { rel: "b.txt".into(), old: None, new: Some(b"b".to_vec()) },
+                // Removing a missing file fails after b.txt was written.
+                Change { rel: "missing/x.txt".into(), old: None, new: None },
+            ],
+            ok: "ok".into(),
+            known: true,
+        };
+        assert!(apply(&mut c, batch).is_err());
+        assert!(!c.ws.root.join("b.txt").exists(), "b.txt not rolled back");
     }
 }

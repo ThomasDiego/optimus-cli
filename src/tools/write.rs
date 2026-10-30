@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Change, Ctx, Outcome, Tool, file, parse};
+use super::{Batch, Ctx, Outcome, Tool, file, parse};
 use crate::message::ToolDef;
 
 pub struct Write;
@@ -37,7 +37,7 @@ impl Tool for Write {
             None
         };
         let ok = format!("ok {}L", a.content.lines().count());
-        Ok(Outcome::Write(Change { rel, old, new: a.content, ok }))
+        Ok(Outcome::Write(Batch::single(rel, old.map(String::into_bytes), Some(a.content.into_bytes()), ok)))
     }
 }
 

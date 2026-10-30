@@ -101,12 +101,12 @@ impl App {
                 let style = if ok { dim() } else { Style::new().fg(Color::Red) };
                 self.out.push(Line::styled(format!("  ⎿ {first}"), style));
             }
-            Event::Diff { path, diff } => self.push_diff(&path.display().to_string(), &diff),
+            Event::Diff { label, diff } => self.push_diff(&label, &diff),
             Event::Approve { req, reply } => {
                 self.flush_partial();
                 let prompt = match req {
-                    Approval::Write { path, diff } => {
-                        self.push_diff(&path.display().to_string(), &diff);
+                    Approval::Write { label, diff } => {
+                        self.push_diff(&label, &diff);
                         "Appliquer ? (o/n)".to_string()
                     }
                     Approval::Exec { cmd, .. } => format!("Exécuter « {cmd} » ? (o/n)"),

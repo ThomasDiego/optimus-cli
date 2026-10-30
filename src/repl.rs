@@ -74,10 +74,10 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
             let first = truncate(output.lines().next().unwrap_or(""), 100);
             println!("{}  {first}{RESET}", if ok { DIM } else { RED });
         }
-        Event::Diff { path, diff } => print_diff(&path.display().to_string(), &diff),
+        Event::Diff { label, diff } => print_diff(&label, &diff),
         Event::Approve { req, reply } => {
             match &req {
-                Approval::Write { path, diff } => print_diff(&path.display().to_string(), diff),
+                Approval::Write { label, diff } => print_diff(label, diff),
                 Approval::Exec { cmd, .. } => println!("{cmd}"),
             }
             print!("Autoriser ? [o/N] ");
