@@ -50,6 +50,8 @@
     (subpath (string-append (param "HOME") "/.cargo/git"))
     (subpath (string-append (param "HOME") "/.npm"))
     (subpath (string-append (param "HOME") "/Library/Caches"))))
+; Deleted directories waiting for undo: only ai itself, outside the sandbox, moves them.
+(deny file-write* (subpath (string-append (param "ROOT") "/.ai-trash")))
 (deny file-write* (subpath (string-append (param "ROOT") "/.git")))
 ; Only the git tool (fixed subcommands, hooks disabled) may write .git.
 (if (equal? (param "GIT") "1")

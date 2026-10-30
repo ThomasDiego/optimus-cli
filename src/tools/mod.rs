@@ -9,6 +9,7 @@ mod list_dir;
 mod matching;
 mod read;
 mod run;
+mod trash;
 mod web_fetch;
 mod write;
 
@@ -43,7 +44,15 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(ws: Workspace, run_allow: Vec<String>) -> Self {
+        trash::purge(&ws.dir, true);
         Self { ws, reads: HashMap::new(), undo: vec![], run_allow }
+    }
+}
+
+/// Undo dies with the session, so its parked directories go too.
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        trash::purge(&self.ws.dir, false);
     }
 }
 

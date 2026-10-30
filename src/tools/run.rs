@@ -50,7 +50,7 @@ fn denied(cmd: &str, args: &[String]) -> Option<String> {
     }
     let inline = lookup(INLINE_CODE_FLAGS);
     if args.iter().any(|a| inline.iter().any(|f| a == f || (f.len() == 2 && a.starts_with(f)))) {
-        return Some("inline code is not allowed: write a script file, then run it".into());
+        return Some("inline code is not allowed".into());
     }
     None
 }
