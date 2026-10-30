@@ -5,6 +5,7 @@ mod config;
 mod exec;
 mod headless;
 mod jobs;
+mod local;
 mod message;
 mod permission;
 mod provider;

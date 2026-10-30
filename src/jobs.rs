@@ -2,7 +2,7 @@
 //! is kept in a bounded buffer, and every job dies with the session: dropping
 //! a job kills its whole process group.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,6 +26,8 @@ struct Log {
     /// Lines ever received, so readers can tell what is new.
     total: usize,
     exit: Option<String>,
+    /// Local ports the job announced (`localhost:5173`): what http_local may reach.
+    ports: BTreeSet<u16>,
 }
 
 struct Job {
@@ -47,6 +49,11 @@ pub struct Jobs {
 impl Jobs {
     pub fn running(&self) -> usize {
         self.list.iter().filter(|j| j.state().is_none()).count()
+    }
+
+    /// Ports announced by jobs still running.
+    pub fn ports(&self) -> BTreeSet<u16> {
+        self.list.iter().filter(|j| j.state().is_none()).flat_map(|j| j.log.lock().unwrap().ports.clone()).collect()
     }
 
     /// Starts `ex` and returns once it settled: its first output, or its exit.
@@ -143,10 +150,21 @@ impl Job {
     }
 }
 
+/// Ports in local addresses a server prints: `http://localhost:5173/`.
+fn ports_in(line: &str) -> Vec<u16> {
+    ["localhost:", "127.0.0.1:", "[::1]:", "0.0.0.0:"]
+        .iter()
+        .flat_map(|host| line.match_indices(host).map(move |(i, _)| &line[i + host.len()..]))
+        .filter_map(|rest| rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())].parse().ok())
+        .filter(|&p| p != 0)
+        .collect()
+}
+
 async fn pipe(stream: impl AsyncRead + Unpin, log: Arc<Mutex<Log>>) {
     let mut lines = BufReader::new(stream).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let mut log = log.lock().unwrap();
+        log.ports.extend(ports_in(&line));
         log.lines.push_back(truncate(&line, 300).into_owned());
         log.total += 1;
         if log.lines.len() > MAX_LINES {
@@ -158,6 +176,13 @@ async fn pipe(stream: impl AsyncRead + Unpin, log: Arc<Mutex<Log>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_announced_local_ports() {
+        assert_eq!(ports_in("  ➜  Local:   http://localhost:5173/"), [5173]);
+        assert_eq!(ports_in("Serving on http://127.0.0.1:8000 and [::1]:8001"), [8000, 8001]);
+        assert!(ports_in("remote http://example.com:80 or localhost:0").is_empty());
+    }
 
     #[tokio::test]
     async fn runs_reports_and_kills_on_stop_and_drop() {

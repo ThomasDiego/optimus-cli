@@ -5,6 +5,7 @@ mod fs_ops;
 mod git;
 mod glob;
 mod grep;
+mod http_local;
 mod list_dir;
 mod matching;
 mod outline;
@@ -72,6 +73,8 @@ pub enum Outcome {
     Fetch(Fetch),
     /// Waits on a background job: async, so the agent performs it.
     Wait { id: usize, secs: u64 },
+    /// GET on a port a background job announced.
+    Local { port: u16, path: String },
 }
 
 pub trait Tool {
@@ -95,6 +98,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(list_dir::ListDir),
         Box::new(run::Run),
         Box::new(process::Process),
+        Box::new(http_local::HttpLocal),
         Box::new(git::Git),
         Box::new(web_fetch::WebFetch),
     ]
@@ -138,6 +142,7 @@ pub mod tests {
             Outcome::Exec(ex) => Ok(format!("exec {} {:?}", ex.program, ex.args)),
             Outcome::Fetch(f) => Ok(format!("fetch {}", f.url)),
             Outcome::Wait { id, secs } => Ok(format!("wait {id} {secs}")),
+            Outcome::Local { port, path } => Ok(format!("get :{port}{path}")),
         }
     }
 }
