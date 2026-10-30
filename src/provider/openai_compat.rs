@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use super::sse::SseLines;
-use super::{Provider, Request};
+use super::{Delta, Provider, Request};
 use crate::message::{Message, Reply, ToolCall, Usage};
 
 /// OpenAI Chat Completions wire format: OpenRouter, Mistral, OpenAI, Ollama…
@@ -47,7 +47,7 @@ impl OpenAiCompat {
 }
 
 impl Provider for OpenAiCompat {
-    async fn send(&self, req: &Request<'_>, on_text: &mut dyn FnMut(&str)) -> Result<Reply> {
+    async fn send(&self, req: &Request<'_>, on: &mut dyn FnMut(Delta<'_>)) -> Result<Reply> {
         let mut res = self
             .http
             .post(&self.url)
@@ -56,7 +56,7 @@ impl Provider for OpenAiCompat {
             .body(serde_json::to_vec(&self.body(req))?)
             .send()
             .await
-            .context("requête provider")?;
+            .context("provider request")?;
         if !res.status().is_success() {
             let status = res.status();
             bail!("{status}: {}", res.text().await.unwrap_or_default());
@@ -68,7 +68,7 @@ impl Provider for OpenAiCompat {
                 if data == "[DONE]" {
                     return Ok(reply);
                 }
-                apply(&mut reply, &serde_json::from_str(&data)?, on_text)?;
+                apply(&mut reply, &serde_json::from_str(&data)?, on)?;
             }
         }
         Ok(reply)
@@ -94,9 +94,9 @@ fn wire(m: &Message) -> Value {
 
 /// Folds one stream chunk into the reply. The trailing usage chunk repeats
 /// `finish_reason` on OpenRouter, so it is treated as accounting only.
-fn apply(reply: &mut Reply, v: &Value, on_text: &mut dyn FnMut(&str)) -> Result<()> {
+fn apply(reply: &mut Reply, v: &Value, on: &mut dyn FnMut(Delta<'_>)) -> Result<()> {
     if let Some(err) = v.get("error") {
-        bail!("{}", err["message"].as_str().unwrap_or("erreur provider"));
+        bail!("{}", err["message"].as_str().unwrap_or("provider error"));
     }
     if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
         let n = |p: &str| u.pointer(p).and_then(Value::as_u64).unwrap_or(0);
@@ -110,7 +110,7 @@ fn apply(reply: &mut Reply, v: &Value, on_text: &mut dyn FnMut(&str)) -> Result<
     }
     let Some(delta) = v.pointer("/choices/0/delta") else { return Ok(()) };
     if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
-        on_text(text);
+        on(Delta::Text(text));
         reply.text.push_str(text);
     }
     for c in delta["tool_calls"].as_array().into_iter().flatten() {
@@ -125,9 +125,9 @@ fn apply(reply: &mut Reply, v: &Value, on_text: &mut dyn FnMut(&str)) -> Result<
         if let Some(name) = c.pointer("/function/name").and_then(Value::as_str).filter(|_| call.name.is_empty()) {
             call.name = name.to_string();
         }
-        if let Some(args) = c.pointer("/function/arguments").and_then(Value::as_str) {
-            call.args.push_str(args);
-        }
+        let args = c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("");
+        call.args.push_str(args);
+        on(Delta::Call { name: &call.name, args: &call.args, added: args.len() });
     }
     Ok(())
 }
@@ -139,7 +139,11 @@ mod tests {
     fn fold(chunks: &[&str]) -> (Reply, String) {
         let (mut reply, mut seen) = (Reply::default(), String::new());
         for c in chunks {
-            apply(&mut reply, &serde_json::from_str(c).unwrap(), &mut |t| seen.push_str(t)).unwrap();
+            let mut on = |d: Delta<'_>| match d {
+                Delta::Text(t) => seen.push_str(t),
+                Delta::Call { added, .. } => seen.push_str(&format!("<{added}>")),
+            };
+            apply(&mut reply, &serde_json::from_str(c).unwrap(), &mut on).unwrap();
         }
         (reply, seen)
     }
@@ -152,7 +156,7 @@ mod tests {
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a\"}"}}]},"finish_reason":"tool_calls"}]}"#,
             r#"{"choices":[{"delta":{"content":""},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"cost":0.5,"prompt_tokens_details":{"cached_tokens":8}}}"#,
         ]);
-        assert_eq!(seen, "Hi");
+        assert_eq!(seen, "Hi<4><8>");
         assert_eq!(reply.calls.len(), 1);
         assert_eq!((reply.calls[0].id.as_str(), reply.calls[0].name.as_str()), ("c1", "read_file"));
         assert_eq!(reply.calls[0].args, r#"{"path":"a"}"#);

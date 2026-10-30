@@ -44,8 +44,7 @@ impl Exec {
     pub fn display(&self) -> String {
         let quote = |a: &String| if a.contains(char::is_whitespace) { format!("{a:?}") } else { a.clone() };
         let cmd = std::iter::once(&self.program).chain(&self.args).map(quote).collect::<Vec<_>>().join(" ");
-        let cmd = if self.background { format!("{cmd} [en fond]") } else { cmd };
-        if self.net { format!("{cmd} [réseau]") } else { cmd }
+        if self.net { format!("{cmd} [network]") } else { cmd }
     }
 }
 

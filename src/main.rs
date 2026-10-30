@@ -35,9 +35,9 @@ async fn main() -> Result<()> {
     let cfg = config::load()?;
     let p = cfg.active()?;
     if p.kind != "openai_compat" {
-        bail!("type de provider inconnu : {}", p.kind);
+        bail!("unknown provider kind: {}", p.kind);
     }
-    let key = std::env::var(&p.key_env).with_context(|| format!("variable {} absente", p.key_env))?;
+    let key = std::env::var(&p.key_env).with_context(|| format!("{} is not set", p.key_env))?;
     let provider = OpenAiCompat::new(&p.base_url, key, p.model.clone(), p.only.clone());
 
     let ws = Workspace::open(std::env::current_dir()?)?;
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         match tui::run(&mut agent, &mut ctx, &mut events, p.model.clone()).await {
             // Terminals that cannot report the cursor get the line UI instead.
-            Err(tui::Error::Init(e)) => eprintln!("TUI indisponible ({e}), mode ligne"),
+            Err(tui::Error::Init(e)) => eprintln!("TUI unavailable ({e}), using line mode"),
             Err(tui::Error::Session(e)) => return Err(e),
             Ok(()) => return Ok(()),
         }

@@ -8,7 +8,7 @@ use crate::command::{self, Action};
 use crate::message::{kilo, money};
 use crate::provider::Provider;
 use crate::tools::{Ctx, truncate};
-use crate::ui::{Approval, Event, brief};
+use crate::ui::{Approval, Event, brief, stat};
 
 const DIM: &str = "\x1b[2m";
 const RED: &str = "\x1b[31m";
@@ -68,29 +68,31 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
             print!("{t}");
             let _ = io::stdout().flush();
         }
-        Event::Usage(_) => {}
+        Event::Usage(_) | Event::Drafting { .. } => {}
         Event::ToolCall(call) => println!("\n{DIM}› {}{RESET}", brief(&call)),
         Event::ToolResult { ok, output } => {
             let first = truncate(output.lines().next().unwrap_or(""), 100);
             println!("{}  {first}{RESET}", if ok { DIM } else { RED });
         }
-        Event::Diff { label, diff } => print_diff(&label, &diff),
+        Event::Diff { diff, .. } => {
+            let (add, del) = stat(&diff);
+            println!("  {GREEN}+{add}{RESET} {RED}-{del}{RESET}");
+        }
         Event::Approve { req, reply } => {
             match &req {
-                Approval::Write { label, diff } => print_diff(label, diff),
-                Approval::Exec { cmd, .. } => println!("{cmd}"),
-                Approval::Fetch { url } => println!("lire {url}"),
+                Approval::Write { diff, .. } => print_diff(diff),
+                Approval::Exec { cmd, .. } => println!("run {cmd}"),
+                Approval::Fetch { url } => println!("fetch {url}"),
             }
-            print!("Autoriser ? [o/N] ");
+            print!("Allow? [y/N] ");
             let _ = io::stdout().flush();
-            let yes = lines.recv().await.is_some_and(|l| matches!(l.trim(), "o" | "O" | "y" | "Y"));
+            let yes = lines.recv().await.is_some_and(|l| matches!(l.trim(), "y" | "Y"));
             let _ = reply.send(yes);
         }
     }
 }
 
-fn print_diff(path: &str, diff: &str) {
-    println!("{path}");
+fn print_diff(diff: &str) {
     for line in diff.lines() {
         let color = match line.as_bytes().first() {
             Some(b'+') => GREEN,

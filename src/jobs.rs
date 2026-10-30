@@ -88,17 +88,17 @@ impl Jobs {
         self.output(id)
     }
 
-    /// One line per job: `1 running 2m npm run dev`.
+    /// One line per job: `job 1 running 2m: npm run dev`.
     pub fn status(&self) -> String {
         if self.list.is_empty() {
             return "no background jobs".into();
         }
-        self.list.iter().map(|j| format!("{} {}", j.id, j.header())).collect::<Vec<_>>().join("\n")
+        self.list.iter().map(|j| format!("{}: {}", j.header(), j.cmd)).collect::<Vec<_>>().join("\n")
     }
 
     /// State, then the lines the model has not seen yet.
     pub fn output(&mut self, id: usize) -> Result<String, String> {
-        let job = self.list.iter_mut().find(|j| j.id == id).ok_or_else(|| format!("no job {id}"))?;
+        let job = self.list.iter_mut().find(|j| j.id == id).ok_or_else(|| format!("no job {id}; see process status"))?;
         let mut out = job.header();
         let log = job.log.lock().unwrap();
         let first = log.total - log.lines.len();
@@ -129,10 +129,11 @@ impl Job {
         self.log.lock().unwrap().exit.clone()
     }
 
+    /// `job 1 running 3s`: the id comes first so the model never guesses it.
     fn header(&self) -> String {
         let secs = self.started.elapsed().as_secs();
         let age = if secs < 120 { format!("{secs}s") } else { format!("{}m", secs / 60) };
-        format!("{} {age} {}", self.state().unwrap_or_else(|| "running".into()), self.cmd)
+        format!("job {} {} {age}", self.id, self.state().unwrap_or_else(|| "running".into()))
     }
 }
 
@@ -160,24 +161,26 @@ mod tests {
 
         // A server-like job: prints, then stays up with a child of its own.
         let first = jobs.start(&ex(&["-c", "echo ready; sleep 60 & echo $! ; wait"]), &root).await.unwrap();
-        assert!(first.starts_with("running") && first.contains("ready"), "{first}");
+        assert!(first.starts_with("job 1 running") && first.contains("ready"), "{first}");
         let pid: libc::pid_t = first.lines().last().unwrap().parse().unwrap();
         assert!(jobs.output(1).unwrap().lines().count() == 1, "old lines repeated");
 
         let quick = jobs.start(&ex(&["-c", "echo done; exit 3"]), &root).await.unwrap();
-        assert!(quick.starts_with("exit 3") && quick.contains("done"), "{quick}");
+        assert!(quick.starts_with("job 2 exit 3") && quick.contains("done"), "{quick}");
         assert_eq!((jobs.running(), jobs.status().lines().count()), (1, 2));
+        let status = jobs.status();
+        assert!(status.starts_with("job 1 running") && status.contains("s: /bin/sh"), "{status}");
 
         // A long command: waiting returns as soon as it ends, not at the deadline.
         jobs.start(&ex(&["-c", "sleep 4; echo built"]), &root).await.unwrap();
         let t = Instant::now();
         let end = jobs.wait(3, 60).await.unwrap();
-        assert!(end.starts_with("exit 0") && end.contains("built") && t.elapsed() < Duration::from_secs(5), "{end}");
+        assert!(end.starts_with("job 3 exit 0") && end.contains("built") && t.elapsed() < Duration::from_secs(5), "{end}");
 
-        // "Coupe ça": stop kills a long script and its children at once.
+        // "Stop it": stop kills a long script and its children at once.
         let long = jobs.start(&ex(&["-c", "sleep 60 & echo $!; wait"]), &root).await.unwrap();
         let child: libc::pid_t = long.lines().last().unwrap().parse().unwrap();
-        assert!(jobs.stop(4).unwrap().starts_with("stopped; running"));
+        assert!(jobs.stop(4).unwrap().starts_with("stopped; job 4 running"));
         tokio::time::sleep(Duration::from_millis(100)).await;
         // SAFETY: signal 0 only checks whether the process exists.
         assert_ne!(unsafe { libc::kill(child, 0) }, 0, "stopped job's child survived");
