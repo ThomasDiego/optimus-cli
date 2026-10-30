@@ -16,7 +16,7 @@ const MAX_JOBS: usize = 4;
 /// Lines kept per job; older ones are dropped.
 const MAX_LINES: usize = 200;
 /// How long a start waits for early output: a URL, or a crash.
-const SETTLE: Duration = Duration::from_secs(3);
+const SETTLE: Duration = Duration::from_secs(8);
 /// Longest single wait on a job.
 const MAX_WAIT: u64 = 300;
 
@@ -76,13 +76,19 @@ impl Jobs {
         });
         self.next += 1;
         let job = Job { id: self.next, cmd: ex.display(), started: Instant::now(), log, read: 0, _group: group };
-        // Done once it exits, or once it printed then went quiet (a server
-        // logging its URL); never longer than SETTLE.
+        // Done once it exits, once it announced a URL, or once it printed then
+        // stayed quiet for 2s (wrappers like npm print a banner long before
+        // the server listens); never longer than SETTLE.
         let deadline = Instant::now() + SETTLE;
         let (mut seen, mut quiet) = (0, 0);
-        while job.state().is_none() && Instant::now() < deadline && !(seen > 0 && quiet >= 5) {
+        while job.state().is_none() && Instant::now() < deadline && !(seen > 0 && quiet >= 20) {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let total = job.log.lock().unwrap().total;
+            let log = job.log.lock().unwrap();
+            if !log.ports.is_empty() {
+                break;
+            }
+            let total = log.total;
+            drop(log);
             quiet = if total == seen { quiet + 1 } else { 0 };
             seen = total;
         }
@@ -131,9 +137,12 @@ impl Jobs {
 
     /// Kills the job and everything it spawned; returns its last output.
     pub fn stop(&mut self, id: usize) -> Result<String, String> {
+        if let Some(job) = self.list.iter().find(|j| j.id == id) {
+            job.log.lock().unwrap().exit.get_or_insert_with(|| "stopped".into());
+        }
         let out = self.output(id)?;
         self.list.retain(|j| j.id != id);
-        Ok(format!("stopped; {out}"))
+        Ok(out)
     }
 }
 
@@ -184,6 +193,17 @@ mod tests {
         assert!(ports_in("remote http://example.com:80 or localhost:0").is_empty());
     }
 
+    /// `npm start` prints its banner long before the server listens: the
+    /// start waits for the URL instead of returning on the banner.
+    #[tokio::test]
+    async fn start_waits_past_a_banner_for_the_url() {
+        let root = crate::sandbox::tests::temp("jobs-banner").canonicalize().unwrap();
+        let script = "echo '> next start'; sleep 1; echo 'Local: http://localhost:3999'; sleep 60";
+        let mut jobs = Jobs::default();
+        let first = jobs.start(&Exec::new("/bin/sh".into(), vec!["-c".into(), script.into()], root.clone(), Duration::ZERO), &root).await.unwrap();
+        assert!(first.contains("localhost:3999") && jobs.ports().contains(&3999), "{first}");
+    }
+
     #[tokio::test]
     async fn runs_reports_and_kills_on_stop_and_drop() {
         let root = crate::sandbox::tests::temp("jobs").canonicalize().unwrap();
@@ -203,7 +223,7 @@ mod tests {
         assert!(status.starts_with("job 1 running") && status.contains("s: /bin/sh"), "{status}");
 
         // A long command: waiting returns as soon as it ends, not at the deadline.
-        jobs.start(&ex(&["-c", "sleep 4; echo built"]), &root).await.unwrap();
+        jobs.start(&ex(&["-c", "echo building; sleep 4; echo built"]), &root).await.unwrap();
         let t = Instant::now();
         let end = jobs.wait(3, 60).await.unwrap();
         assert!(end.starts_with("job 3 exit 0") && end.contains("built") && t.elapsed() < Duration::from_secs(5), "{end}");
@@ -211,7 +231,7 @@ mod tests {
         // "Stop it": stop kills a long script and its children at once.
         let long = jobs.start(&ex(&["-c", "sleep 60 & echo $!; wait"]), &root).await.unwrap();
         let child: libc::pid_t = long.lines().last().unwrap().parse().unwrap();
-        assert!(jobs.stop(4).unwrap().starts_with("stopped; job 4 running"));
+        assert!(jobs.stop(4).unwrap().starts_with("job 4 stopped"));
         tokio::time::sleep(Duration::from_millis(100)).await;
         // SAFETY: signal 0 only checks whether the process exists.
         assert_ne!(unsafe { libc::kill(child, 0) }, 0, "stopped job's child survived");
