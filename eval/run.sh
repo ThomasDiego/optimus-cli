@@ -8,7 +8,7 @@
 set -u
 export EVAL=${0:A:h}
 AI=${EVAL:h}/target/release/ai
-RUNS=$HOME/.ai-eval-runs
+RUNS=${RUNS:-$HOME/.ai-eval-runs}
 OUT=$EVAL/results
 JOBS=${JOBS:-4}
 [ -x $AI ] || { echo "build first: cargo build --release"; exit 1; }
