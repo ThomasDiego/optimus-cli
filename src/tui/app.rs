@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::style::{Color, Modifier, Style};
@@ -18,6 +18,8 @@ use crate::tools::truncate;
 use crate::ui::{Approval, Event, brief, stat, summary};
 
 const DIFF_LINES: usize = 60;
+/// A second Ctrl+C within this window quits; one alone never does.
+const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 const THINKING: &str = "Thinking";
 /// Gutter width: text of every speaker starts in the same column.
 const INDENT: &str = "  ";
@@ -62,6 +64,8 @@ pub struct App {
     pub model: String,
     /// Background jobs still running, refreshed between turns.
     pub jobs: usize,
+    /// Set by Ctrl+C: another one before this instant quits.
+    pub quit_until: Option<Instant>,
 }
 
 fn dim() -> Style {
@@ -92,7 +96,23 @@ impl App {
             mode,
             model,
             jobs: 0,
+            quit_until: None,
         }
+    }
+
+    /// True on the second Ctrl+C within QUIT_WINDOW; the first one arms it.
+    fn ctrl_c(&mut self) -> bool {
+        let now = Instant::now();
+        if self.quit_until.is_some_and(|t| now < t) {
+            return true;
+        }
+        self.quit_until = Some(now + QUIT_WINDOW);
+        false
+    }
+
+    /// The window is open: the status line says a second Ctrl+C quits.
+    pub fn quit_armed(&self) -> bool {
+        self.quit_until.is_some_and(|t| Instant::now() < t)
     }
 
     pub fn on_agent(&mut self, ev: Event) {
@@ -174,7 +194,7 @@ impl App {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if self.approval.is_some() {
             match k.code {
-                KeyCode::Char('c') if ctrl => return Action::Cancel,
+                KeyCode::Char('c') if ctrl => return if self.ctrl_c() { Action::Quit } else { Action::Cancel },
                 KeyCode::Char('y' | 'Y') | KeyCode::Enter => self.answer(true),
                 KeyCode::Char('n' | 'N') | KeyCode::Esc => self.answer(false),
                 _ => {}
@@ -220,12 +240,14 @@ impl App {
 
     fn edit(&mut self, k: KeyEvent, ctrl: bool) -> Action {
         match k.code {
+            // Each press still does its job (stop the turn, clear the input);
+            // only a second one in quick succession quits.
             KeyCode::Char('c') if ctrl => {
+                if self.ctrl_c() {
+                    return Action::Quit;
+                }
                 if self.busy {
                     return Action::Cancel;
-                }
-                if self.input.is_empty() {
-                    return Action::Quit;
                 }
                 self.set_input(String::new());
             }
@@ -409,6 +431,39 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{Action, App};
+    use crate::permission::Mode;
+
+    #[test]
+    fn quits_only_on_a_second_ctrl_c_in_time() {
+        let mut app = App::new("m".into(), Rc::new(Cell::new(Mode::Ask)));
+        let mut ctrl_c = |app: &mut App| app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(ctrl_c(&mut app), Action::None) && app.quit_armed());
+        assert!(matches!(ctrl_c(&mut app), Action::Quit));
+
+        // Too late: the second press only arms again.
+        app.quit_until = Some(Instant::now() - Duration::from_millis(1));
+        assert!(matches!(ctrl_c(&mut app), Action::None));
+
+        // During a turn the first press stops it, the second quits.
+        let mut app = App::new("m".into(), Rc::new(Cell::new(Mode::Ask)));
+        app.busy = true;
+        assert!(matches!(ctrl_c(&mut app), Action::Cancel));
+        assert!(matches!(ctrl_c(&mut app), Action::Quit));
+
+        // With text typed, the first press clears it.
+        let mut app = App::new("m".into(), Rc::new(Cell::new(Mode::Ask)));
+        app.input = "draft".into();
+        app.cursor = 5;
+        assert!(matches!(ctrl_c(&mut app), Action::None) && app.input.is_empty());
+    }
+
     #[test]
     fn counts_diff_lines_without_headers() {
         assert_eq!(crate::ui::stat("--- a\n+++ b\n@@ -1 +1,2 @@\n-x\n+y\n+z\n ctx\n"), (2, 1));
