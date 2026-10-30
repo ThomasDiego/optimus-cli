@@ -135,6 +135,13 @@ impl Jobs {
         Ok(out)
     }
 
+    /// Unread output of the latest job that announced `port`, running or not:
+    /// why a server stopped answering, without a separate process call.
+    pub fn output_on(&mut self, port: u16) -> Option<String> {
+        let id = self.list.iter().rev().find(|j| j.log.lock().unwrap().ports.contains(&port))?.id;
+        self.output(id).ok()
+    }
+
     /// Kills the job and everything it spawned; returns its last output.
     pub fn stop(&mut self, id: usize) -> Result<String, String> {
         if let Some(job) = self.list.iter().find(|j| j.id == id) {
@@ -202,6 +209,20 @@ mod tests {
         let mut jobs = Jobs::default();
         let first = jobs.start(&Exec::new("/bin/sh".into(), vec!["-c".into(), script.into()], root.clone(), Duration::ZERO), &root).await.unwrap();
         assert!(first.contains("localhost:3999") && jobs.ports().contains(&3999), "{first}");
+    }
+
+    /// A server that died on a request: its crash output is found by port.
+    #[tokio::test]
+    async fn crash_output_is_found_by_port() {
+        let root = crate::sandbox::tests::temp("jobs-crash").canonicalize().unwrap();
+        let script = "echo 'listening on localhost:3998'; sleep 0.5; echo 'TypeError: boom' >&2; exit 1";
+        let mut jobs = Jobs::default();
+        jobs.start(&Exec::new("/bin/sh".into(), vec!["-c".into(), script.into()], root.clone(), Duration::ZERO), &root).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(!jobs.ports().contains(&3998));
+        let out = jobs.output_on(3998).unwrap();
+        assert!(out.contains("exit 1") && out.contains("TypeError: boom"), "{out}");
+        assert!(jobs.output_on(4000).is_none());
     }
 
     #[tokio::test]

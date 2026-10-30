@@ -44,26 +44,38 @@ pub struct Snapshot {
 }
 
 impl Batch {
-    pub fn single(rel: PathBuf, old: Option<Vec<u8>>, new: Option<Vec<u8>>, ok: String) -> Self {
-        Self { changes: vec![Change { rel, old, new, kind: Kind::File }], ok, known: true }
-    }
-
     /// What the user is asked about: `src/a.rs` or `a.rs → b.rs`.
     pub fn label(&self) -> String {
-        match self.changes.as_slice() {
-            [to, from] if to.old.is_none() && from.new.is_none() && to.new == from.old => {
-                format!("{} → {}", from.rel.display(), to.rel.display())
-            }
-            changes => changes.iter().map(|c| c.rel.display().to_string()).collect::<Vec<_>>().join(", "),
+        match self.moves() {
+            Some(moves) => moves.join(", "),
+            None => self.changes.iter().map(|c| c.rel.display().to_string()).collect::<Vec<_>>().join(", "),
         }
     }
 
-    /// Unified diff for the user only; never sent to the model.
+    /// Unified diff for the user only; never sent to the model. Moves show
+    /// in the label; only the directories they emptied are listed here.
     pub fn diff(&self) -> String {
-        if self.label().contains(" → ") {
-            return String::new();
+        let moving = self.moves().is_some();
+        let shown = self.changes.iter().filter(|c| !moving || c.kind != Kind::File);
+        shown.map(Change::diff).collect::<Vec<_>>().join("\n")
+    }
+
+    /// `from → to` per move: a create then a delete of the same bytes, the
+    /// directories they left empty last. None if anything else is in the batch.
+    fn moves(&self) -> Option<Vec<String>> {
+        let (files, dirs): (Vec<&Change>, Vec<&Change>) = self.changes.iter().partition(|c| c.kind == Kind::File);
+        if files.is_empty() || files.len() % 2 == 1 || dirs.iter().any(|d| d.kind != Kind::Dir || d.new.is_some()) {
+            return None;
         }
-        self.changes.iter().map(Change::diff).collect::<Vec<_>>().join("\n")
+        files
+            .chunks(2)
+            .map(|pair| match pair {
+                [to, from] if to.old.is_none() && from.new.is_none() && to.new == from.old => {
+                    Some(format!("{} → {}", from.rel.display(), to.rel.display()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -210,7 +222,8 @@ mod tests {
     #[test]
     fn refuses_write_if_file_changed_meanwhile() {
         let mut c = ctx("race", &[("a.txt", "one")]);
-        let batch = Batch::single("a.txt".into(), Some(b"one".to_vec()), Some(b"two".to_vec()), "ok".into());
+        let change = Change { rel: "a.txt".into(), old: Some(b"one".to_vec()), new: Some(b"two".to_vec()), kind: Kind::File };
+        let batch = Batch { changes: vec![change], ok: "ok".into(), known: true };
         std::fs::write(c.ws.root.join("a.txt"), "user edit").unwrap();
         assert!(apply(&mut c, batch).unwrap_err().contains("changed before write"));
     }

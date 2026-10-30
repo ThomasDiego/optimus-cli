@@ -83,7 +83,11 @@ pub fn brief(call: &ToolCall) -> String {
             Some(path) => format!("{p} in {path}"),
             None => p,
         }),
-        "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        "move_file" => {
+            let pair = |v: &Value| Some(format!("{} → {}", v["from"].as_str()?, v["to"].as_str()?));
+            let moves: Vec<String> = pair(&args).into_iter().chain(args["moves"].as_array().into_iter().flatten().filter_map(pair)).collect();
+            (!moves.is_empty()).then(|| moves.join(", "))
+        }
         "replace" => s("old").zip(s("new")).map(|(old, new)| format!("{old} → {new}")),
         "web_fetch" => s("url"),
         "http_local" => args["port"].as_u64().map(|p| format!(":{p}{}", s("path").unwrap_or_default())),
@@ -91,10 +95,18 @@ pub fn brief(call: &ToolCall) -> String {
             let detail = s("message").or_else(|| s("name")).or_else(|| s("rev"));
             [Some(op), detail].into_iter().flatten().collect::<Vec<_>>().join(" ")
         }),
-        _ => s("path").or_else(|| {
-            let paths = args["paths"].as_array()?.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-            Some(paths.join(", "))
-        }),
+        _ => {
+            // path, paths (read, delete), files[].path (write) or edits[].path (edit).
+            let list = |k: &str| args[k].as_array().into_iter().flatten();
+            let nested = list("files").chain(list("edits")).filter_map(|f| f["path"].as_str());
+            let mut paths: Vec<&str> = vec![];
+            for p in args["path"].as_str().into_iter().chain(list("paths").filter_map(Value::as_str)).chain(nested) {
+                if !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+            (!paths.is_empty()).then(|| paths.join(", "))
+        }
     };
     match detail {
         Some(d) => format!("{} {}", call.name, truncate(&d, 100)),
@@ -104,6 +116,15 @@ pub fn brief(call: &ToolCall) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn briefs_name_every_target_of_a_batch() {
+        let brief = |name: &str, args: &str| super::brief(&crate::message::ToolCall { id: "1".into(), name: name.into(), args: args.into() });
+        assert_eq!(brief("move_file", r#"{"moves":[{"from":"a","to":"b"},{"from":"c","to":"d"}]}"#), "move_file a → b, c → d");
+        assert_eq!(brief("write_file", r#"{"files":[{"path":"x.rs","content":""},{"path":"y.rs","content":""}]}"#), "write_file x.rs, y.rs");
+        assert_eq!(brief("edit_file", r#"{"path":"z.rs","edits":[{"old":""},{"path":"y.rs"},{"path":"z.rs"}]}"#), "edit_file z.rs, y.rs");
+        assert_eq!(brief("read_file", r#"{"paths":["a","b"]}"#), "read_file a, b");
+    }
+
     #[test]
     fn drafts_name_the_target_while_streaming() {
         assert_eq!(super::draft("write_file", r#"{"path": "src/a.rs", "content": "fn"#), "write_file src/a.rs");

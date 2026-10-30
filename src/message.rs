@@ -6,7 +6,9 @@ use serde_json::Value;
 #[derive(Clone, Debug)]
 pub enum Message {
     User(String),
-    Assistant { text: String, calls: Vec<ToolCall> },
+    /// `reasoning`: the model's thinking, which reasoning models (DeepSeek)
+    /// require back while a tool loop runs.
+    Assistant { text: String, calls: Vec<ToolCall>, reasoning: String },
     Tool { id: String, content: String },
 }
 
@@ -65,6 +67,7 @@ impl AddAssign for Usage {
 pub struct Reply {
     pub text: String,
     pub calls: Vec<ToolCall>,
+    pub reasoning: String,
     pub usage: Usage,
 }
 
