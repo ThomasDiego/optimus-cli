@@ -40,6 +40,9 @@ enum Op {
     Branch,
     Switch,
     Restore,
+    Init,
+    Stash,
+    Uncommit,
 }
 
 #[derive(Deserialize)]
@@ -59,17 +62,19 @@ struct Args {
     stat: bool,
     #[serde(default)]
     create: bool,
+    #[serde(default)]
+    pop: bool,
 }
 
 impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes.",
+            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore"]},
+                    "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit"]},
                     "paths": {"type": "array", "items": {"type": "string"}},
                     "rev": {"type": "string", "description": "show: commit, default HEAD"},
                     "message": {"type": "string", "description": "commit message"},
@@ -78,7 +83,8 @@ impl Tool for Git {
                     "staged": {"type": "boolean", "description": "diff/restore the index"},
                     "all": {"type": "boolean", "description": "add every change (secrets excluded)"},
                     "stat": {"type": "boolean", "description": "diff: stat only, for large changes"},
-                    "create": {"type": "boolean", "description": "switch: create the branch"}
+                    "create": {"type": "boolean", "description": "switch: create the branch"},
+                    "pop": {"type": "boolean", "description": "stash: restore the latest stash instead of saving"}
                 },
                 "required": ["op"]
             }),
@@ -88,8 +94,10 @@ impl Tool for Git {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         // A parent repository is out of the sandbox's reach anyway.
-        if !ctx.ws.dir.is_dir(".git") {
-            return Err("not a git repository".into());
+        match (matches!(a.op, Op::Init), ctx.ws.dir.is_dir(".git")) {
+            (false, false) => return Err("not a git repository; init creates one".into()),
+            (true, true) => return Err("already a git repository".into()),
+            _ => {}
         }
         // Pathspecs go to git as text, so `..` is refused here rather than at I/O.
         let paths = a
@@ -171,6 +179,26 @@ impl Tool for Git {
                 }
                 Review::Exec
             }
+            Op::Init => {
+                ["init", "-q"].iter().for_each(|s| push(s));
+                Review::Write
+            }
+            Op::Stash if a.pop => {
+                ["stash", "pop"].iter().for_each(|s| push(s));
+                Review::Write
+            }
+            Op::Stash => {
+                ["stash", "push"].iter().for_each(|s| push(s));
+                if let Some(msg) = a.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                    ["-m", msg].iter().for_each(|s| push(s));
+                }
+                Review::Write
+            }
+            // Soft only: the commit goes, its changes stay staged.
+            Op::Uncommit => {
+                ["reset", "--soft", "HEAD~1"].iter().for_each(|s| push(s));
+                Review::Write
+            }
         };
         let takes_paths = matches!(a.op, Op::Diff | Op::Log | Op::Show | Op::Add | Op::Restore) && !(matches!(a.op, Op::Add) && a.all);
         if takes_paths && !paths.is_empty() {
@@ -209,8 +237,12 @@ mod tests {
     #[test]
     fn builds_fixed_commands_and_rejects_injection() {
         let mut c = ctx("git", &[("a.rs", "")]);
-        assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap_err(), "not a git repository");
+        assert!(plan(&mut c, json!({"op": "status"})).unwrap_err().starts_with("not a git repository"));
+        assert_eq!(plan(&mut c, json!({"op": "init"})).unwrap(), ("init -q".into(), true));
         std::fs::create_dir(c.ws.root.join(".git")).unwrap();
+        assert_eq!(plan(&mut c, json!({"op": "init"})).unwrap_err(), "already a git repository");
+        assert_eq!(plan(&mut c, json!({"op": "uncommit"})).unwrap(), ("reset --soft HEAD~1".into(), true));
+        assert_eq!(plan(&mut c, json!({"op": "stash", "message": "wip"})).unwrap().0, "stash push -m wip");
         assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap(), ("status --short --branch".into(), false));
         assert_eq!(plan(&mut c, json!({"op": "diff"})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat");
         assert_eq!(plan(&mut c, json!({"op": "diff", "stat": true})).unwrap().0, "diff --no-ext-diff --no-textconv --stat");
@@ -249,5 +281,23 @@ mod tests {
         assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
         assert!(run(json!({"op": "log"})).await.contains("add a"));
         assert!(!root.join("HOOK_RAN").exists(), "hook ran");
+
+        // Committed on the wrong branch: uncommit keeps the work, stash parks it.
+        assert!(run(json!({"op": "uncommit"})).await.starts_with("exit 0"));
+        assert!(!run(json!({"op": "log"})).await.contains("add a"));
+        assert!(run(json!({"op": "status"})).await.contains("A  a.rs"));
+        assert!(run(json!({"op": "stash"})).await.starts_with("exit 0"));
+        assert!(!root.join("a.rs").exists());
+        assert!(run(json!({"op": "stash", "pop": true})).await.starts_with("exit 0"));
+        assert_eq!(std::fs::read_to_string(root.join("a.rs")).unwrap(), "a\n");
+    }
+
+    #[tokio::test]
+    async fn init_creates_a_repository_in_the_sandbox() {
+        let mut c = ctx("git-init", &[("a.rs", "")]);
+        let tool = all().into_iter().find(|t| t.def().name == "git").unwrap();
+        let Outcome::Exec(ex) = tool.run(&mut c, r#"{"op":"init"}"#).unwrap() else { unreachable!() };
+        assert!(crate::exec::run(&ex, &c.ws.root).await.unwrap().starts_with("exit 0"));
+        assert!(c.ws.root.join(".git/HEAD").exists());
     }
 }
