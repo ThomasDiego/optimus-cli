@@ -20,6 +20,8 @@ pub enum Approval {
     /// `label` names the files: `src/a.rs` or `a.rs → b.rs`.
     Write { label: String, diff: String },
     Exec { cmd: String, net: bool },
+    /// A web page read; always asked since the URL itself leaves the machine.
+    Fetch { url: String },
 }
 
 /// One-line human summary of a tool call: `read_file src/main.rs`.
@@ -36,6 +38,7 @@ pub fn brief(call: &ToolCall) -> String {
             None => p,
         }),
         "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        "web_fetch" => s("url"),
         "git" => s("op").map(|op| {
             let detail = s("message").or_else(|| s("name")).or_else(|| s("rev"));
             [Some(op), detail].into_iter().flatten().collect::<Vec<_>>().join(" ")

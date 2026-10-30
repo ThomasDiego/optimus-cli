@@ -56,6 +56,7 @@ fn show(ev: Event) {
                 Approval::Write { label, .. } => (format!("écriture de {label}"), "--mode edit ou auto"),
                 Approval::Exec { cmd, net: false } => (format!("exécution de {cmd}"), "--mode auto"),
                 Approval::Exec { cmd, net: true } => (format!("exécution de {cmd}"), "réseau : confirmation interactive obligatoire"),
+                Approval::Fetch { url } => (format!("lecture de {url}"), "réseau : confirmation interactive obligatoire"),
             };
             eprintln!("  ✗ {what} refusée ({hint})");
         }

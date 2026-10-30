@@ -79,6 +79,7 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
             match &req {
                 Approval::Write { label, diff } => print_diff(label, diff),
                 Approval::Exec { cmd, .. } => println!("{cmd}"),
+                Approval::Fetch { url } => println!("lire {url}"),
             }
             print!("Autoriser ? [o/N] ");
             let _ = io::stdout().flush();
