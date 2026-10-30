@@ -1,5 +1,6 @@
-; macOS kernel sandbox for every `run` command. Params: ROOT (project),
-; HOME, TMP (per-user temp), NET ("1" when the user approved network).
+; macOS kernel sandbox for every command. Params: ROOT (project), HOME,
+; TMP (per-user temp), NET ("1" when the user approved network), GIT ("1"
+; for git tool writes).
 (version 1)
 (allow default)
 
@@ -50,3 +51,6 @@
     (subpath (string-append (param "HOME") "/.npm"))
     (subpath (string-append (param "HOME") "/Library/Caches"))))
 (deny file-write* (subpath (string-append (param "ROOT") "/.git")))
+; Only the git tool (fixed subcommands, hooks disabled) may write .git.
+(if (equal? (param "GIT") "1")
+  (allow file-write* (subpath (string-append (param "ROOT") "/.git"))))

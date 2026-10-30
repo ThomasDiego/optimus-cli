@@ -36,6 +36,10 @@ pub fn brief(call: &ToolCall) -> String {
             None => p,
         }),
         "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        "git" => s("op").map(|op| {
+            let detail = s("message").or_else(|| s("name")).or_else(|| s("rev"));
+            [Some(op), detail].into_iter().flatten().collect::<Vec<_>>().join(" ")
+        }),
         _ => s("path").or_else(|| {
             let paths = args["paths"].as_array()?.iter().filter_map(Value::as_str).collect::<Vec<_>>();
             Some(paths.join(", "))

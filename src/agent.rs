@@ -4,6 +4,7 @@ use std::rc::Rc;
 use anyhow::{Result, bail};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::exec::Review;
 use crate::{exec, track};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
@@ -93,8 +94,14 @@ impl<P: Provider> Agent<P> {
                 change::apply(ctx, batch)
             }
             Outcome::Exec(ex) => {
-                let kind = if ex.net { Kind::ExecNet } else { Kind::Exec };
-                if self.mode.get().needs_approval(kind) && !self.approve(Approval::Exec { cmd: ex.display(), net: ex.net }).await {
+                let kind = match (ex.net, ex.review) {
+                    (true, _) => Some(Kind::ExecNet),
+                    (false, Review::None) => None,
+                    (false, Review::Write) => Some(Kind::Write),
+                    (false, Review::Exec) => Some(Kind::Exec),
+                };
+                let ask = kind.is_some_and(|k| self.mode.get().needs_approval(k));
+                if ask && !self.approve(Approval::Exec { cmd: ex.display(), net: ex.net }).await {
                     return Err(DENIED.into());
                 }
                 let before = track::snapshot(&ctx.ws);

@@ -7,7 +7,18 @@ use tokio::process::Command;
 
 use crate::tools::truncate;
 
-/// A program launch prepared by the `run` tool.
+/// Which permission a launch needs, applied by the agent before running it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Review {
+    /// Read-only (e.g. `git status`): never asked.
+    None,
+    /// Local, reversible state change (e.g. `git commit`): asked like a file write.
+    Write,
+    /// Arbitrary code or destructive: asked like a command.
+    Exec,
+}
+
+/// A program launch prepared by a tool.
 pub struct Exec {
     pub program: String,
     pub args: Vec<String>,
@@ -15,9 +26,19 @@ pub struct Exec {
     pub timeout: Duration,
     /// Network access, granted only after explicit user approval.
     pub net: bool,
+    pub review: Review,
+    /// Lets the sandbox write `.git` (git tool only).
+    pub git: bool,
+    /// Forced variables and leading arguments, not shown in approvals.
+    pub env: &'static [(&'static str, &'static str)],
+    pub hidden_args: &'static [&'static str],
 }
 
 impl Exec {
+    pub fn new(program: String, args: Vec<String>, dir: PathBuf, timeout: Duration) -> Self {
+        Self { program, args, dir, timeout, net: false, review: Review::Exec, git: false, env: &[], hidden_args: &[] }
+    }
+
     pub fn display(&self) -> String {
         let quote = |a: &String| if a.contains(char::is_whitespace) { format!("{a:?}") } else { a.clone() };
         let cmd = std::iter::once(&self.program).chain(&self.args).map(quote).collect::<Vec<_>>().join(" ");
@@ -62,6 +83,7 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
             cmd.env(k, v);
         }
     }
+    cmd.envs(ex.env.iter().copied());
     // SAFETY: only async-signal-safe setrlimit calls between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
@@ -88,14 +110,15 @@ fn command(ex: &Exec, root: &Path) -> Command {
     let tmp = std::env::temp_dir().canonicalize().unwrap_or_else(|_| "/private/tmp".into());
     // Per-user temp is .../T; its parent also holds the per-user cache (C).
     let tmp = if tmp.ends_with("T") { tmp.parent().map(Path::to_path_buf).unwrap_or(tmp) } else { tmp };
-    let net = Path::new(if ex.net { "1" } else { "0" });
+    let flag = |on: bool| Path::new(if on { "1" } else { "0" });
     let mut c = Command::new("/usr/bin/sandbox-exec");
-    for (k, v) in [("ROOT", root), ("HOME", home.as_path()), ("TMP", tmp.as_path()), ("NET", net)] {
+    let params = [("ROOT", root), ("HOME", home.as_path()), ("TMP", tmp.as_path()), ("NET", flag(ex.net)), ("GIT", flag(ex.git))];
+    for (k, v) in params {
         let mut def = OsString::from(format!("{k}="));
         def.push(v);
         c.arg("-D").arg(def);
     }
-    c.arg("-p").arg(PROFILE).arg(&ex.program).args(&ex.args);
+    c.arg("-p").arg(PROFILE).arg(&ex.program).args(ex.hidden_args).args(&ex.args);
     c
 }
 
@@ -103,7 +126,7 @@ fn command(ex: &Exec, root: &Path) -> Command {
 #[cfg(not(target_os = "macos"))]
 fn command(ex: &Exec, _root: &Path) -> Command {
     let mut c = Command::new(&ex.program);
-    c.args(&ex.args);
+    c.args(ex.hidden_args).args(&ex.args);
     c
 }
 
@@ -135,7 +158,7 @@ mod tests {
 
     fn exec(program: &str, args: &[&str], dir: &Path, secs: u64) -> Exec {
         let args = args.iter().map(|s| s.to_string()).collect();
-        Exec { program: program.into(), args, dir: dir.into(), timeout: Duration::from_secs(secs), net: false }
+        Exec::new(program.into(), args, dir.into(), Duration::from_secs(secs))
     }
 
     #[tokio::test]
