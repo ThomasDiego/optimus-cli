@@ -53,6 +53,7 @@ impl<P: Provider> Agent<P> {
             let events = self.events.clone();
             let reply = self.provider.send(&req, &mut |t| drop(events.send(Event::Text(t.to_string())))).await?;
             usage += reply.usage;
+            self.emit(Event::Usage(reply.usage));
             let calls = reply.calls.clone();
             self.messages.push(Message::Assistant { text: reply.text, calls: reply.calls });
             if calls.is_empty() {
@@ -106,6 +107,23 @@ impl<P: Provider> Agent<P> {
         let _ = self.events.send(ev);
     }
 
+    /// After a cancelled turn, answers dangling tool calls so the history stays valid.
+    pub fn heal(&mut self) {
+        let Some(pos) = self.messages.iter().rposition(|m| matches!(m, Message::Assistant { .. })) else { return };
+        let Message::Assistant { calls, .. } = &self.messages[pos] else { return };
+        let answered: Vec<&str> = self.messages[pos + 1..]
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<String> = calls.iter().filter(|c| !answered.contains(&c.id.as_str())).map(|c| c.id.clone()).collect();
+        for id in missing {
+            self.messages.push(Message::Tool { id, content: "interrupted by user".into() });
+        }
+    }
+
     pub fn note(&mut self, note: String) {
         self.note = Some(note);
     }
@@ -113,5 +131,39 @@ impl<P: Provider> Agent<P> {
     pub fn clear(&mut self) {
         self.messages.clear();
         self.note = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Reply;
+
+    struct Silent;
+
+    impl Provider for Silent {
+        async fn send(&self, _: &Request<'_>, _: &mut dyn FnMut(&str)) -> Result<Reply> {
+            Ok(Reply::default())
+        }
+    }
+
+    #[test]
+    fn heal_answers_dangling_calls_only() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut agent = Agent::new(Silent, vec![], tx, Mode::Ask);
+        let call = |id: &str| ToolCall { id: id.into(), name: "read_file".into(), args: "{}".into() };
+        agent.messages.push(Message::Assistant { text: String::new(), calls: vec![call("a"), call("b")] });
+        agent.messages.push(Message::Tool { id: "a".into(), content: "ok".into() });
+        agent.heal();
+        agent.heal();
+        let tools: Vec<&str> = agent
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool { id, content } => Some(if content == "ok" { id.as_str() } else { "healed" }),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools, ["a", "healed"]);
     }
 }
