@@ -35,11 +35,12 @@ const SHELL_TOOLS: &[(&str, &str)] = &[
     ("ls tree", "list_dir"),
     ("cat head tail less", "read_file"),
     ("grep rg ag", "grep"),
+    ("wc", "grep with mode=count, or read_file (its footer gives the line count)"),
     ("find fd", "glob"),
     ("rm rmdir", "delete_file"),
     ("mv", "move_file"),
     ("cp touch mkdir echo tee sed awk", "write_file or edit_file (parent dirs are created)"),
-    ("curl wget", "web_fetch"),
+    ("curl wget", "web_fetch (reads pages only; nothing can be sent)"),
     ("git", "git"),
     ("kill pkill ps", "process"),
 ];
@@ -98,9 +99,12 @@ impl Tool for Run {
             return Err("cmd is the program name only; put arguments in args".into());
         }
         if let Some((_, tool)) = SHELL_TOOLS.iter().find(|(cmd, _)| cmd.split(' ').any(|c| c == a.cmd)) {
-            return Err(format!("no shell commands; use the {tool} tool"));
+            return Err(format!("no shell commands; use {tool}"));
         }
-        if a.cmd.contains('/') || !ctx.run_allow.contains(&a.cmd) {
+        if a.cmd.contains('/') {
+            return Err("programs run by name only; run build outputs through their tool (cargo run, npm run…)".into());
+        }
+        if !ctx.run_allow.contains(&a.cmd) {
             return Err(format!("{} not allowed; allowed: {}", a.cmd, ctx.run_allow.join(", ")));
         }
         if let Some(reason) = denied(&a.cmd, &a.args) {
@@ -127,9 +131,10 @@ mod tests {
         assert_eq!(call(&mut c, "run", json!({"cmd": "cargo", "args": ["test"]})).unwrap(), r#"exec cargo ["test"]"#);
         assert!(call(&mut c, "run", json!({"cmd": "cargo test"})).unwrap_err().contains("put arguments in args"));
         assert!(call(&mut c, "run", json!({"cmd": "bash"})).unwrap_err().contains("not allowed; allowed: cargo"));
-        assert_eq!(call(&mut c, "run", json!({"cmd": "ls"})).unwrap_err(), "no shell commands; use the list_dir tool");
-        assert!(call(&mut c, "run", json!({"cmd": "curl"})).unwrap_err().ends_with("web_fetch tool"));
-        assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).is_err());
+        assert_eq!(call(&mut c, "run", json!({"cmd": "ls"})).unwrap_err(), "no shell commands; use list_dir");
+        assert!(call(&mut c, "run", json!({"cmd": "curl"})).unwrap_err().contains("nothing can be sent"));
+        assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).unwrap_err().contains("by name only"));
+        assert!(call(&mut c, "run", json!({"cmd": "./target/debug/demo"})).unwrap_err().contains("cargo run"));
         assert!(call(&mut c, "run", json!({"cmd": "cargo", "dir": ".."})).is_err());
     }
 

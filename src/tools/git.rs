@@ -73,7 +73,7 @@ impl Tool for Git {
                     "paths": {"type": "array", "items": {"type": "string"}},
                     "rev": {"type": "string", "description": "show: commit, default HEAD"},
                     "message": {"type": "string", "description": "commit message"},
-                    "name": {"type": "string", "description": "branch name; branch without name lists"},
+                    "name": {"type": "string", "description": "branch name. branch: creates without switching (no name lists); switch create=true: creates and switches"},
                     "n": {"type": "integer", "description": "log entries, default 10"},
                     "staged": {"type": "boolean", "description": "diff/restore the index"},
                     "all": {"type": "boolean", "description": "add every change (secrets excluded)"},

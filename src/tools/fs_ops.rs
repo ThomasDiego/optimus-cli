@@ -85,12 +85,23 @@ impl Tool for Delete {
         if list.is_empty() || list.len() > MAX_PATHS {
             return Err(format!("give path or 1 to {MAX_PATHS} paths"));
         }
-        let (mut files, mut dirs) = (vec![], vec![]);
+        let (mut files, mut dirs, mut done, mut skipped) = (vec![], vec![], vec![], vec![]);
         for p in &list {
-            let rel = ctx.ws.rel_write(p)?;
-            if rel == Path::new(".") {
-                return Err("the project root cannot be deleted".into());
-            }
+            // Protected paths are skipped, not fatal: "delete everything" then
+            // takes one call instead of one retry per refusal.
+            let rel = match ctx.ws.rel_write(p) {
+                Ok(rel) if rel == Path::new(".") => {
+                    skipped.push("the project root cannot be deleted".to_string());
+                    continue;
+                }
+                Ok(rel) => rel,
+                Err(e) if e.contains("secret file") || e.contains("read-only") => {
+                    skipped.push(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            done.push(p.as_str());
             match ctx.ws.dir.symlink_metadata(&rel).map_err(|e| file::io_err(p, e))?.is_dir() {
                 true => dirs.push(rel),
                 false => files.push(Change { old: Some(file::read_bytes(ctx, &rel, p)?), rel, new: None, kind: Kind::File }),
@@ -118,7 +129,13 @@ impl Tool for Delete {
                 }
             }
         }
-        let ok = format!("deleted {}", list.join(", "));
+        if done.is_empty() {
+            return Err(skipped.join("; "));
+        }
+        let mut ok = format!("deleted {}", done.join(", "));
+        if !skipped.is_empty() {
+            ok.push_str(&format!("; skipped {}", skipped.join("; ")));
+        }
         Ok(Outcome::Write(Batch { changes: files, ok, known: true }))
     }
 }
@@ -179,6 +196,10 @@ mod tests {
         assert!(call(&mut c, "delete_file", json!({"path": "../outside"})).is_err());
         assert!(call(&mut c, "delete_file", json!({"path": "."})).unwrap_err().contains("root"));
         assert!(call(&mut c, "delete_file", json!({"paths": [".env"]})).is_err());
+        // Mixed with deletable paths, protected ones are skipped and reported.
+        let ok = call(&mut c, "delete_file", json!({"paths": [".", ".env", ".git/HEAD", "b.txt"]})).unwrap();
+        assert!(ok.starts_with("deleted b.txt; skipped ") && ok.contains("secret") && ok.contains("read-only"), "{ok}");
+        assert!(!c.ws.root.join("b.txt").exists() && c.ws.root.join(".env").exists());
     }
 
     #[test]

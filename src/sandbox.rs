@@ -31,12 +31,27 @@ impl Workspace {
         } else {
             p
         };
-        let mut rel: PathBuf = p.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+        // `..` is resolved lexically: climbing above the root is refused even
+        // through directories that do not exist.
+        let mut rel = PathBuf::new();
+        for c in p.components() {
+            match c {
+                Component::ParentDir if !rel.pop() => return Err(format!("{path}: outside project")),
+                Component::Normal(n) => rel.push(n),
+                _ => {}
+            }
+        }
         if rel.as_os_str().is_empty() {
             rel.push(".");
         }
         if is_secret(&rel) || self.real(&rel).is_some_and(|r| is_secret(&r)) {
             return Err(format!("{path}: secret file, access denied"));
+        }
+        // cap-std would refuse later anyway; a precise reason here saves the
+        // model from probing what "permission denied" means.
+        let existing = rel.ancestors().find_map(|a| self.real(a));
+        if existing.is_some_and(|r| !r.starts_with(&self.root)) {
+            return Err(format!("{path}: symlink to outside the project, not reachable"));
         }
         Ok(rel)
     }
@@ -119,9 +134,10 @@ pub mod tests {
 
         assert!(ws.rel("/etc/passwd").is_err());
         for p in ["../outside.txt", "link", "a/../../outside.txt"] {
-            let rel = ws.rel(p).unwrap();
-            assert!(ws.dir.read(&rel).is_err(), "{p} escaped");
-            assert!(ws.dir.write(&rel, "y").is_err(), "{p} wrote outside");
+            assert!(ws.rel(p).is_err(), "{p} accepted");
+            // Second wall: the capability handle refuses even unchecked paths.
+            assert!(ws.dir.read(p).is_err(), "{p} escaped");
+            assert!(ws.dir.write(p, "y").is_err(), "{p} wrote outside");
         }
         assert_eq!(std::fs::read_to_string(base.join("outside.txt")).unwrap(), "x");
         assert!(ws.walk_base(Some("..")).is_err());
