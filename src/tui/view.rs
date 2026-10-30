@@ -36,7 +36,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         Constraint::Length(1),
     ])
     .areas(f.area());
-    let tail = (!app.partial.is_empty()).then(|| Line::raw(app.partial.clone()));
+    let tail = (!app.partial.is_empty()).then(|| (app.ai_gutter(), Line::raw(app.partial.clone())));
     app.out.render(history, f.buffer_mut(), tail.as_ref());
     f.render_widget(live_line(app), live);
     input::render_box(f, app, chat);
@@ -126,5 +126,31 @@ mod tests {
     fn shimmer_keeps_text() {
         let text: String = shimmer("Thinking…", 300).iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "Thinking…");
+    }
+
+    /// The whole screen as text: speakers share one text column after their marker.
+    #[test]
+    fn user_and_model_text_align() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        use crate::message::ToolCall;
+        use crate::ui::Event;
+
+        let mode = std::rc::Rc::new(std::cell::Cell::new(crate::permission::Mode::Ask));
+        let mut app = super::App::new("m".into(), mode);
+        app.echo("salut");
+        app.start_turn();
+        app.on_agent(Event::Text("Salut ! Que puis-je faire pour toi sur ce projet ?\n".into()));
+        app.on_agent(Event::ToolCall(ToolCall { id: "1".into(), name: "list_dir".into(), args: "{}".into() }));
+        app.on_agent(Event::ToolResult { ok: true, output: "src/".into() });
+        app.on_agent(Event::Text("Voilà.".into()));
+        app.end_turn();
+
+        let mut term = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        term.draw(|f| super::render(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rows: Vec<String> = (0..7).map(|y| (0..30).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()).collect();
+        assert_eq!(rows, ["", "› salut", "● Salut ! Que puis-je faire", "  pour toi sur ce projet ?", "● list_dir", "  ⎿ src/", "● Voilà."]);
     }
 }

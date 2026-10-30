@@ -1,14 +1,17 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 /// Chat history with virtualized rendering: each line's wrapped height is
 /// cached per width, and a frame only lays out the lines on screen, so the
 /// cost of a frame does not grow with the conversation.
+///
+/// Each line has a gutter (`› `, `● ` or blanks) drawn on its first row; the
+/// text wraps in the columns after it, so wrapped rows stay aligned.
 #[derive(Default)]
 pub struct Transcript {
-    lines: Vec<Line<'static>>,
+    lines: Vec<(Span<'static>, Line<'static>)>,
     heights: Vec<u16>,
     width: u16,
     total: usize,
@@ -18,7 +21,8 @@ pub struct Transcript {
     view: u16,
 }
 
-fn height_of(line: &Line<'static>, width: u16) -> u16 {
+fn height_of(gutter: &Span<'static>, line: &Line<'static>, width: u16) -> u16 {
+    let width = width.saturating_sub(gutter.width() as u16);
     if width == 0 {
         return 1;
     }
@@ -26,15 +30,20 @@ fn height_of(line: &Line<'static>, width: u16) -> u16 {
 }
 
 impl Transcript {
+    /// A full-width line (blank separators).
     pub fn push(&mut self, line: Line<'static>) {
-        let h = height_of(&line, self.width);
+        self.push_in(Span::raw(""), line);
+    }
+
+    pub fn push_in(&mut self, gutter: Span<'static>, line: Line<'static>) {
+        let h = height_of(&gutter, &line, self.width);
         // While the user reads older lines, new ones must not move the view.
         if self.offset > 0 {
             self.offset += h as usize;
         }
         self.total += h as usize;
         self.heights.push(h);
-        self.lines.push(line);
+        self.lines.push((gutter, line));
     }
 
     /// Positive scrolls towards older lines.
@@ -57,32 +66,37 @@ impl Transcript {
             return;
         }
         self.width = width;
-        self.heights = self.lines.iter().map(|l| height_of(l, width)).collect();
+        self.heights = self.lines.iter().map(|(g, l)| height_of(g, l, width)).collect();
         self.total = self.heights.iter().map(|&h| h as usize).sum();
     }
 
     /// Renders the visible window; `tail` (the line being streamed) is drawn
     /// after the stored lines without being stored.
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, tail: Option<&Line<'static>>) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, tail: Option<&(Span<'static>, Line<'static>)>) {
         self.set_width(area.width);
         self.view = area.height;
-        let tail = tail.map(|l| (l, height_of(l, area.width)));
-        let total = self.total + tail.map_or(0, |(_, h)| h as usize);
+        let tail = tail.map(|(g, l)| (g, l, height_of(g, l, area.width)));
+        let total = self.total + tail.map_or(0, |(.., h)| h as usize);
         let view = area.height as usize;
         self.offset = self.offset.min(total.saturating_sub(view));
         let bottom = total - self.offset;
         let top = bottom.saturating_sub(view);
 
-        let stored = self.lines.iter().zip(self.heights.iter().copied()).rev();
+        let stored = self.lines.iter().zip(self.heights.iter().copied()).rev().map(|((g, l), h)| (g, l, h));
         let mut end = total;
-        for (line, h) in tail.into_iter().chain(stored) {
+        for (gutter, line, h) in tail.into_iter().chain(stored) {
             let start = end - h as usize;
             if end <= top {
                 break;
             }
             if start < bottom {
                 let (from, to) = (start.max(top), end.min(bottom));
-                let rect = Rect { x: area.x, y: area.y + (from - top) as u16, width: area.width, height: (to - from) as u16 };
+                let y = area.y + (from - top) as u16;
+                let indent = (gutter.width() as u16).min(area.width);
+                if from == start {
+                    buf.set_span(area.x, y, gutter, indent);
+                }
+                let rect = Rect { x: area.x + indent, y, width: area.width - indent, height: (to - from) as u16 };
                 Paragraph::new(line.clone())
                     .wrap(Wrap { trim: false })
                     .scroll(((from - start) as u16, 0))
@@ -97,7 +111,7 @@ impl Transcript {
 mod tests {
     use super::*;
 
-    fn screen(t: &mut Transcript, w: u16, h: u16, tail: Option<&Line<'static>>) -> Vec<String> {
+    fn screen(t: &mut Transcript, w: u16, h: u16, tail: Option<&(Span<'static>, Line<'static>)>) -> Vec<String> {
         let area = Rect::new(0, 0, w, h);
         let mut buf = Buffer::empty(area);
         t.render(area, &mut buf, tail);
@@ -117,12 +131,20 @@ mod tests {
         t.push(Line::raw("line 11"));
         assert_eq!(screen(&mut t, 10, 3, None), ["line 6", "line 7", "line 8"]);
         t.follow();
-        let tail = Line::raw("streaming");
+        let tail = (Span::raw(""), Line::raw("streaming"));
         assert_eq!(screen(&mut t, 10, 3, Some(&tail)), ["line 10", "line 11", "streaming"]);
         // A wrapped line is partially visible at the top edge.
         t.push(Line::raw("aaaa bbbb cccc"));
         assert_eq!(screen(&mut t, 8, 2, None), ["bbbb", "cccc"]);
         t.scroll(1000);
         assert_eq!(screen(&mut t, 8, 2, None), ["line 1", "line 2"]);
+    }
+
+    #[test]
+    fn wrapped_rows_stay_after_the_gutter() {
+        let mut t = Transcript::default();
+        t.push_in(Span::raw("● "), Line::raw("aaaa bbbb cccc"));
+        t.push_in(Span::raw("  "), Line::raw("dd"));
+        assert_eq!(screen(&mut t, 7, 4, None), ["● aaaa", "  bbbb", "  cccc", "  dd"]);
     }
 }

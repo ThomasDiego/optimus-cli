@@ -7,6 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use tokio::sync::oneshot;
 
+use super::input::ACCENT;
 use super::markdown::Markdown;
 use super::transcript::Transcript;
 use crate::command::{self, Suggestion};
@@ -18,6 +19,8 @@ use crate::ui::{Approval, Event, brief, stat, summary};
 
 const DIFF_LINES: usize = 60;
 const THINKING: &str = "Thinking";
+/// Gutter width: text of every speaker starts in the same column.
+const INDENT: &str = "  ";
 
 pub enum Action {
     None,
@@ -48,6 +51,8 @@ pub struct App {
     stat: Option<(usize, usize)>,
     /// Characters received in the current request, until its usage arrives.
     pub streamed: usize,
+    /// The model's current text block already has its bullet.
+    speaking: bool,
     pub started: Instant,
     pub approval: Option<(String, oneshot::Sender<bool>)>,
     pub usage: Usage,
@@ -79,6 +84,7 @@ impl App {
             activity: String::new(),
             stat: None,
             streamed: 0,
+            speaking: false,
             started: Instant::now(),
             approval: None,
             usage: Usage::default(),
@@ -112,20 +118,21 @@ impl App {
             Event::Text(_) | Event::Drafting { .. } | Event::Usage(_) => {}
             Event::ToolCall(call) => {
                 self.flush_partial();
+                self.speaking = false;
                 self.activity = brief(&call);
-                self.out.push(Line::styled(format!("● {}", self.activity), dim()));
+                self.out.push_in(Span::styled("● ", dim()), Line::styled(self.activity.clone(), dim()));
             }
             Event::ToolResult { ok, output } => {
                 self.activity = THINKING.into();
                 if let Some((add, del)) = self.stat.take().filter(|&s| ok && s != (0, 0)) {
                     let (add, del) = (format!("+{add}"), format!("-{del}"));
-                    let spans = vec![Span::styled("  ⎿ ", dim()), Span::styled(add, Color::Green), Span::raw(" "), Span::styled(del, Color::Red)];
-                    return self.out.push(Line::from(spans));
+                    let spans = vec![Span::styled("⎿ ", dim()), Span::styled(add, Color::Green), Span::raw(" "), Span::styled(del, Color::Red)];
+                    return self.out.push_in(Span::raw(INDENT), Line::from(spans));
                 }
                 // The model-facing refusal text is long; the user only needs the fact.
                 let (first, failed) = if output.strip_prefix("error: ") == Some(DENIED) { ("denied".into(), true) } else { summary(ok, &output) };
                 let style = if failed { Style::new().fg(Color::Red) } else { dim() };
-                self.out.push(Line::styled(format!("  ⎿ {}", truncate(&first, 120)), style));
+                self.out.push_in(Span::raw(INDENT), Line::styled(format!("⎿ {}", truncate(&first, 120)), style));
             }
             // The user did not ask to review it: a line count is enough.
             Event::Diff { diff, .. } => self.stat = Some(stat(&diff)),
@@ -306,10 +313,10 @@ impl App {
                 Some(b'@') => dim(),
                 _ => Style::new(),
             };
-            self.out.push(Line::styled(format!("    {line}"), style));
+            self.out.push_in(Span::raw("    "), Line::styled(line.to_string(), style));
         }
         if lines.len() > DIFF_LINES {
-            self.out.push(Line::styled(format!("    … {} more lines", lines.len() - DIFF_LINES), dim()));
+            self.out.push_in(Span::raw("    "), Line::styled(format!("… {} more lines", lines.len() - DIFF_LINES), dim()));
         }
     }
 
@@ -336,9 +343,20 @@ impl App {
         self.partial.push_str(t);
         while let Some(i) = self.partial.find('\n') {
             let line = self.md.line(&self.partial[..i]);
-            self.out.push(line);
+            self.push_ai(line);
             self.partial.drain(..=i);
         }
+    }
+
+    /// The model's text: a bullet opens each block, its other lines align after it.
+    pub fn ai_gutter(&self) -> Span<'static> {
+        if self.speaking { Span::raw(INDENT) } else { Span::styled("● ", Style::new().fg(ACCENT)) }
+    }
+
+    fn push_ai(&mut self, line: Line<'static>) {
+        let gutter = self.ai_gutter();
+        self.speaking = true;
+        self.out.push_in(gutter, line);
     }
 
     pub fn start_turn(&mut self) {
@@ -350,7 +368,7 @@ impl App {
     pub fn flush_partial(&mut self) {
         if !self.partial.is_empty() {
             let line = self.md.line(&std::mem::take(&mut self.partial));
-            self.out.push(line);
+            self.push_ai(line);
         }
     }
 
@@ -360,14 +378,16 @@ impl App {
         self.flush_partial();
         self.md.reset();
         self.busy = false;
+        self.speaking = false;
         self.approval = None;
     }
 
     pub fn echo(&mut self, input: &str) {
         self.out.push(Line::default());
+        let bold = Style::new().add_modifier(Modifier::BOLD);
         for (i, l) in input.lines().enumerate() {
-            let prefix = if i == 0 { "› " } else { "  " };
-            self.out.push(Line::styled(format!("{prefix}{l}"), Style::new().add_modifier(Modifier::BOLD)));
+            let gutter = if i == 0 { "› " } else { INDENT };
+            self.out.push_in(Span::styled(gutter, bold), Line::styled(l.to_string(), bold));
         }
     }
 
@@ -383,7 +403,7 @@ impl App {
 
     pub fn say(&mut self, msg: &str, error: bool) {
         let style = if error { Style::new().fg(Color::Red) } else { dim() };
-        self.out.push(Line::styled(msg.to_string(), style));
+        self.out.push_in(Span::raw(INDENT), Line::styled(msg.to_string(), style));
     }
 }
 
