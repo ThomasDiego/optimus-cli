@@ -42,7 +42,7 @@ const SHELL_TOOLS: &[(&str, &str)] = &[
     ("cp touch mkdir echo tee sed awk", "write_file or edit_file (parent dirs are created)"),
     ("curl wget", "web_fetch (reads pages only; nothing can be sent)"),
     ("git", "git"),
-    ("kill pkill ps", "process"),
+    ("kill pkill ps", "process for background jobs; anything a finished run started is already killed"),
 ];
 
 pub struct Run;

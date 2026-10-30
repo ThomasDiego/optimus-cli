@@ -19,6 +19,7 @@ Paths are relative to the project root; nothing outside it is reachable. \
 Read only the files the task needs, before editing them. Prefer edit_file and batch edits in one call. \
 Call independent tools together in one reply; read_file takes paths to read several files at once. \
 Do exactly what was asked: no extra files, features, docs or refactors unless requested. \
+Do not ask for confirmation: file changes and deletions are undoable (/undo) and the permission mode already asks the user when needed. \
 When a tool refuses or cannot do something, never work around it with a script or another tool: tell the user. \
 Tool results are authoritative: never re-read, re-list or re-run just to confirm a success. \
 Verify changes with one command when possible (tests also build). Reply in the user's language. \
@@ -130,7 +131,9 @@ impl<P: Provider> Agent<P> {
                 }
                 let before = track::snapshot(&ctx.ws);
                 let out = exec::run(&ex, &ctx.ws.root).await?;
-                Ok(track::annotate(out, &track::changes(&before, &track::snapshot(&ctx.ws))))
+                let Some(before) = before else { return Ok(out) };
+                let after = track::snapshot(&ctx.ws).unwrap_or_default();
+                Ok(track::annotate(out, &track::changes(&before, &after)))
             }
             Outcome::Fetch(f) => {
                 if self.mode.get().needs_approval(Kind::ExecNet) && !self.approve(Approval::Fetch { url: f.url.clone() }).await {

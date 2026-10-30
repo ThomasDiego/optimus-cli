@@ -69,9 +69,15 @@ impl Jobs {
         });
         self.next += 1;
         let job = Job { id: self.next, cmd: ex.display(), started: Instant::now(), log, read: 0, _group: group };
+        // Done once it exits, or once it printed then went quiet (a server
+        // logging its URL); never longer than SETTLE.
         let deadline = Instant::now() + SETTLE;
-        while job.state().is_none() && Instant::now() < deadline {
+        let (mut seen, mut quiet) = (0, 0);
+        while job.state().is_none() && Instant::now() < deadline && !(seen > 0 && quiet >= 5) {
             tokio::time::sleep(Duration::from_millis(100)).await;
+            let total = job.log.lock().unwrap().total;
+            quiet = if total == seen { quiet + 1 } else { 0 };
+            seen = total;
         }
         self.list.push(job);
         Ok(self.output(self.next).expect("just pushed"))

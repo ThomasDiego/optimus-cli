@@ -48,6 +48,27 @@ pub fn read_bytes(ctx: &Ctx, rel: &Path, shown: &str) -> Result<Vec<u8>, String>
     ctx.ws.dir.read(rel).map_err(|e| io_err(shown, e))
 }
 
+fn size(n: u64) -> String {
+    if n < 10_000 { format!("{n} bytes") } else { format!("{} KB", n / 1024) }
+}
+
+/// What a binary is, from its magic bytes: enough for the model to stop there.
+fn kind(b: &[u8]) -> &'static str {
+    const MAGIC: &[(&[u8], &str)] = &[
+        (b"\x89PNG", "PNG image"),
+        (b"\xff\xd8\xff", "JPEG image"),
+        (b"GIF8", "GIF image"),
+        (b"%PDF", "PDF document"),
+        (b"PK\x03\x04", "zip archive"),
+        (b"\x1f\x8b", "gzip archive"),
+        (b"\0asm", "WebAssembly module"),
+        (b"\x7fELF", "ELF executable"),
+        (b"\xcf\xfa\xed\xfe", "Mach-O executable"),
+        (b"SQLite format 3", "SQLite database"),
+    ];
+    MAGIC.iter().find(|(m, _)| b.starts_with(m)).map_or("unknown format", |(_, k)| k)
+}
+
 /// Reads a UTF-8 (lossy) text file, refusing binaries and huge files.
 pub fn read_text(ctx: &Ctx, rel: &Path, shown: &str) -> Result<String, String> {
     let meta = ctx.ws.dir.metadata(rel).map_err(|e| io_err(shown, e))?;
@@ -55,11 +76,11 @@ pub fn read_text(ctx: &Ctx, rel: &Path, shown: &str) -> Result<String, String> {
         return Err(format!("{shown}: directory, use list_dir"));
     }
     if meta.len() > MAX_TEXT {
-        return Err(format!("{shown}: too large ({} KB)", meta.len() / 1024));
+        return Err(format!("{shown}: too large to read ({}); search it with grep", size(meta.len())));
     }
     let bytes = ctx.ws.dir.read(rel).map_err(|e| io_err(shown, e))?;
     if bytes[..bytes.len().min(8192)].contains(&0) {
-        return Err(format!("{shown}: binary file, {} KB", bytes.len() / 1024));
+        return Err(format!("{shown}: binary, {} ({})", kind(&bytes), size(bytes.len() as u64)));
     }
     Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
 }
