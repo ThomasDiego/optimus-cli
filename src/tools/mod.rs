@@ -9,6 +9,7 @@ mod list_dir;
 mod matching;
 mod process;
 mod read;
+mod replace;
 mod run;
 mod trash;
 mod web_fetch;
@@ -83,6 +84,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(read::Read),
         Box::new(edit::Edit),
+        Box::new(replace::Replace),
         Box::new(write::Write),
         Box::new(fs_ops::Move),
         Box::new(fs_ops::Delete),

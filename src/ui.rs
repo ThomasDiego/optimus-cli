@@ -78,6 +78,7 @@ pub fn brief(call: &ToolCall) -> String {
             None => p,
         }),
         "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        "replace" => s("old").zip(s("new")).map(|(old, new)| format!("{old} → {new}")),
         "web_fetch" => s("url"),
         "git" => s("op").map(|op| {
             let detail = s("message").or_else(|| s("name")).or_else(|| s("rev"));
