@@ -52,7 +52,8 @@ pub fn annotate(output: String, changed: &[String]) -> String {
         list.push_str(&format!(" +{} more", changed.len() - MAX_LISTED));
     }
     let sep = if rest.is_empty() { "" } else { "\n" };
-    format!("{head}, {} files changed\n[changed] {list}{sep}{rest}", changed.len())
+    let s = if changed.len() == 1 { "" } else { "s" };
+    format!("{head}, {} file{s} changed\n[changed] {list}{sep}{rest}", changed.len())
 }
 
 #[cfg(test)]

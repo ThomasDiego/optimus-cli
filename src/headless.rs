@@ -17,19 +17,20 @@ pub async fn run<P: Provider>(
     events: &mut mpsc::UnboundedReceiver<Event>,
     prompt: String,
 ) -> Result<()> {
+    let mut flow = Flow::Start;
     let result = {
         let turn = agent.turn(prompt, ctx);
         tokio::pin!(turn);
         loop {
             tokio::select! {
                 biased;
-                Some(ev) = events.recv() => show(ev),
+                Some(ev) = events.recv() => show(ev, &mut flow),
                 r = &mut turn => break r,
             }
         }
     };
     while let Ok(ev) = events.try_recv() {
-        show(ev);
+        show(ev, &mut flow);
     }
     println!();
     let u = result?;
@@ -37,14 +38,29 @@ pub async fn run<P: Provider>(
     Ok(())
 }
 
-fn show(ev: Event) {
+/// Where stdout stands, so texts from separate steps do not run together.
+#[derive(PartialEq)]
+enum Flow {
+    Start,
+    Text,
+    Gap,
+}
+
+fn show(ev: Event, flow: &mut Flow) {
     match ev {
         Event::Text(t) => {
-            print!("{t}");
+            let sep = if *flow == Flow::Gap { "\n\n" } else { "" };
+            print!("{sep}{t}");
             let _ = io::stdout().flush();
+            *flow = Flow::Text;
         }
         Event::Usage(_) => {}
-        Event::ToolCall(call) => eprintln!("› {}", brief(&call)),
+        Event::ToolCall(call) => {
+            if *flow == Flow::Text {
+                *flow = Flow::Gap;
+            }
+            eprintln!("› {}", brief(&call));
+        }
         Event::ToolResult { ok, output } => {
             let first = truncate(output.lines().next().unwrap_or(""), 120).replace('\t', "  ");
             eprintln!("  {}{first}", if ok { "" } else { "✗ " });

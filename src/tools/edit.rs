@@ -122,8 +122,9 @@ mod tests {
     fn edit_flow() {
         let mut c = ctx("edit", &[("a.rs", "let a = 1;\nlet b = 1;\nlet c = 1;\n")]);
         let edit = |old: &str, new: &str| json!({"path": "a.rs", "edits": [{"old": old, "new": new}]});
-        assert!(call(&mut c, "edit_file", edit("a", "z")).unwrap_err().contains("read the file"));
-        call(&mut c, "read_file", json!({"path": "a.rs"})).unwrap();
+        let err = call(&mut c, "edit_file", edit("a", "z")).unwrap_err();
+        assert!(err.starts_with("a.rs: not read yet") && err.contains("1\tlet a = 1;"), "{err}");
+        assert_eq!(call(&mut c, "read_file", json!({"path": "a.rs"})).unwrap(), "unchanged since last read");
 
         let err = call(&mut c, "edit_file", edit("= 1", "= 2")).unwrap_err();
         assert_eq!(err, "3 matches at L1,L2,L3: add context or set all=true");
@@ -138,8 +139,22 @@ mod tests {
         assert!(call(&mut c, "edit_file", bad).unwrap_err().starts_with("edit 2: old not found"));
         assert_eq!(std::fs::read_to_string(c.ws.root.join("a.rs")).unwrap(), body, "not atomic");
 
+        // Changed behind the model's back: refused, with the current content
+        // attached so the retry can succeed without a read_file.
         std::fs::write(c.ws.root.join("a.rs"), "changed").unwrap();
-        assert!(call(&mut c, "edit_file", edit("changed", "x")).unwrap_err().contains("changed since last read"));
+        let err = call(&mut c, "edit_file", edit("changed", "x")).unwrap_err();
+        assert!(err.contains("changed since your last read") && err.ends_with("1\tchanged\n"), "{err}");
+        assert!(call(&mut c, "edit_file", edit("changed", "x")).unwrap().starts_with("ok"));
+    }
+
+    #[test]
+    fn reports_stale_reads_once() {
+        let mut c = ctx("stale", &[("a.rs", "a"), ("b.rs", "b"), ("c.rs", "c")]);
+        call(&mut c, "read_file", json!({"paths": ["a.rs", "b.rs", "c.rs"]})).unwrap();
+        std::fs::write(c.ws.root.join("a.rs"), "edited by the user").unwrap();
+        std::fs::remove_file(c.ws.root.join("c.rs")).unwrap();
+        assert_eq!(crate::tools::stale(&mut c), ["a.rs", "c.rs"]);
+        assert!(crate::tools::stale(&mut c).is_empty());
     }
 
     #[test]

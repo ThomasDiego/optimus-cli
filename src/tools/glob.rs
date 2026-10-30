@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::{Ctx, Outcome, Tool, capped, parse};
 use crate::message::ToolDef;
+use crate::sandbox::is_secret;
 
 const CAP: usize = 100;
 
@@ -47,7 +48,8 @@ impl Tool for Glob {
             .filter(|e| e.path().strip_prefix(&base).is_ok_and(|p| glob.is_match(p)))
             .map(|e| {
                 let mtime = e.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(UNIX_EPOCH);
-                (mtime, ctx.ws.display(e.path()))
+                let secret = if is_secret(e.path()) { " (secret)" } else { "" };
+                (mtime, format!("{}{secret}", ctx.ws.display(e.path())))
             })
             .collect();
         if hits.is_empty() {
@@ -69,6 +71,8 @@ mod tests {
         let mut c = ctx("glob", &[(".gitignore", "target/\n"), ("src/a.rs", ""), ("target/b.rs", ""), ("c.md", "")]);
         assert_eq!(call(&mut c, "glob", json!({"pattern": "**/*.rs"})).unwrap(), "src/a.rs");
         assert_eq!(call(&mut c, "glob", json!({"pattern": "*.zz"})).unwrap(), "no match");
+        std::fs::write(c.ws.root.join(".env"), "S=1").unwrap();
+        assert_eq!(call(&mut c, "glob", json!({"pattern": ".env*"})).unwrap(), ".env (secret)");
         assert!(call(&mut c, "glob", json!({"pattern": "*", "path": ".."})).is_err());
     }
 }
