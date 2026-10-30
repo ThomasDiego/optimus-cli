@@ -1,6 +1,8 @@
 mod app;
+mod clipboard;
 mod input;
 mod markdown;
+mod select;
 mod transcript;
 mod view;
 
@@ -26,10 +28,11 @@ use crate::ui::Event;
 
 /// ~30 fps, only while a turn runs; idle means zero wakeups.
 const FRAME: Duration = Duration::from_millis(33);
-/// Mouse buttons and wheel only (SGR encoding): unlike full capture, mouse
-/// motion produces no events, so moving the pointer costs nothing.
-const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
-const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1000l";
+/// Mouse buttons, wheel and motion while a button is held (SGR encoding):
+/// unlike full capture, a pointer that is only moving produces no events.
+/// Dragging selects text, since capturing the mouse disables the terminal's own.
+const MOUSE_ON: &str = "\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l";
 
 pub enum Error {
     /// The terminal could not be set up; nothing was drawn yet.
@@ -163,6 +166,9 @@ async fn session<P: Provider>(
 /// Ratatui diffs against the previous frame: only changed cells are written.
 fn draw(term: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     term.draw(|f| view::render(f, app))?;
+    if let Some(text) = app.copied.take().filter(|t| !t.is_empty()) {
+        clipboard::copy(&text);
+    }
     Ok(())
 }
 

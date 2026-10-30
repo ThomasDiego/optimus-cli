@@ -2,13 +2,15 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
+use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use tokio::sync::oneshot;
 
 use super::input::ACCENT;
 use super::markdown::Markdown;
+use super::select::{Selection, inside};
 use super::transcript::Transcript;
 use crate::command::{self, Suggestion};
 use crate::message::Usage;
@@ -66,6 +68,16 @@ pub struct App {
     pub jobs: usize,
     /// Set by Ctrl+C: another one before this instant quits.
     pub quit_until: Option<Instant>,
+    /// Where the history was last drawn: the only place a selection starts.
+    pub view_area: Rect,
+    /// Text selected with the mouse; kept highlighted after the copy.
+    pub selection: Option<Selection>,
+    /// The button is still down: the selection follows the pointer.
+    held: bool,
+    /// Released: the next render reads the selection into `copied`.
+    pub copy_pending: bool,
+    /// Text for the clipboard, taken by the draw loop.
+    pub copied: Option<String>,
 }
 
 fn dim() -> Style {
@@ -97,6 +109,40 @@ impl App {
             model,
             jobs: 0,
             quit_until: None,
+            view_area: Rect::default(),
+            selection: None,
+            held: false,
+            copy_pending: false,
+            copied: None,
+        }
+    }
+
+    /// Wheel scrolls; dragging with the left button selects, and releasing
+    /// copies. Scrolling drops the selection: the text moves under it.
+    fn on_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let rows = if m.kind == MouseEventKind::ScrollUp { 3 } else { -3 };
+                self.out.scroll(rows);
+                (self.selection, self.held) = (None, false);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.held = inside(self.view_area, m.column, m.row);
+                self.selection = self.held.then(|| Selection::new(m.column, m.row));
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.held => {
+                if let Some(sel) = &mut self.selection {
+                    sel.drag(m.column, m.row);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.held => {
+                self.held = false;
+                match self.selection.filter(|s| !s.is_empty()) {
+                    Some(_) => self.copy_pending = true,
+                    None => self.selection = None,
+                }
+            }
+            _ => {}
         }
     }
 
@@ -179,11 +225,7 @@ impl App {
                 Action::None
             }
             TermEvent::Mouse(m) => {
-                match m.kind {
-                    MouseEventKind::ScrollUp => self.out.scroll(3),
-                    MouseEventKind::ScrollDown => self.out.scroll(-3),
-                    _ => {}
-                }
+                self.on_mouse(m);
                 Action::None
             }
             _ => Action::None,
@@ -191,6 +233,7 @@ impl App {
     }
 
     fn on_key(&mut self, k: KeyEvent) -> Action {
+        self.selection = None;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if self.approval.is_some() {
             match k.code {
@@ -439,6 +482,44 @@ mod tests {
 
     use super::{Action, App};
     use crate::permission::Mode;
+
+    #[test]
+    fn dragging_selects_and_releasing_copies_what_is_on_screen() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::text::{Line, Span};
+
+        let mut app = App::new("m".into(), Rc::new(Cell::new(Mode::Ask)));
+        app.out.push_in(Span::raw("● "), Line::raw("hello world"));
+        let mut term = Terminal::new(TestBackend::new(30, 10)).unwrap();
+        let mut frame = |app: &mut App| drop(term.draw(|f| crate::tui::view::render(f, app)).unwrap());
+        let mouse = |kind, column, row| Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE });
+        let left = MouseButton::Left;
+        frame(&mut app);
+        // A short conversation sits at the top of the history.
+        let row = app.view_area.y;
+
+        // A plain click selects and copies nothing; neither does one outside the history.
+        app.on_term(mouse(MouseEventKind::Down(left), 3, row));
+        app.on_term(mouse(MouseEventKind::Up(left), 3, row));
+        frame(&mut app);
+        assert!(app.selection.is_none() && app.copied.is_none());
+        app.on_term(mouse(MouseEventKind::Down(left), 3, 9));
+        assert!(app.selection.is_none());
+
+        app.on_term(mouse(MouseEventKind::Down(left), 2, row));
+        app.on_term(mouse(MouseEventKind::Drag(left), 6, row));
+        frame(&mut app);
+        assert!(app.copied.is_none(), "nothing is copied while the button is down");
+        app.on_term(mouse(MouseEventKind::Up(left), 6, row));
+        frame(&mut app);
+        assert_eq!(app.copied.take().as_deref(), Some("hello"));
+        // Still highlighted, until the view moves or a key is pressed.
+        assert!(app.selection.is_some());
+        app.on_term(mouse(MouseEventKind::ScrollUp, 6, row));
+        assert!(app.selection.is_none());
+    }
 
     #[test]
     fn quits_only_on_a_second_ctrl_c_in_time() {
