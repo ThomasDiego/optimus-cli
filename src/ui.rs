@@ -31,8 +31,10 @@ pub fn brief(call: &ToolCall) -> String {
     let detail = match call.name.as_str() {
         "run" => s("cmd").map(|c| {
             let rest = args["args"].as_array().into_iter().flatten().filter_map(Value::as_str);
-            std::iter::once(c.as_str()).chain(rest).collect::<Vec<_>>().join(" ")
+            let cmd = std::iter::once(c.as_str()).chain(rest).collect::<Vec<_>>().join(" ");
+            if args["background"] == true { format!("{cmd} (en fond)") } else { cmd }
         }),
+        "process" => s("op").map(|op| args["id"].as_u64().map_or(op.clone(), |id| format!("{op} {id}"))),
         "glob" | "grep" => s("pattern").map(|p| match s("path") {
             Some(path) => format!("{p} in {path}"),
             None => p,

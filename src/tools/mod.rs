@@ -7,6 +7,7 @@ mod glob;
 mod grep;
 mod list_dir;
 mod matching;
+mod process;
 mod read;
 mod run;
 mod trash;
@@ -19,6 +20,7 @@ use std::path::PathBuf;
 use serde::de::DeserializeOwned;
 
 use crate::exec::Exec;
+use crate::jobs::Jobs;
 use crate::message::ToolDef;
 use crate::sandbox::Workspace;
 use crate::web::Fetch;
@@ -40,16 +42,19 @@ pub struct Ctx {
     pub undo: Vec<Vec<change::Snapshot>>,
     /// Programs the `run` tool may start.
     pub run_allow: Vec<String>,
+    /// Background programs; dropped (killed) with the session.
+    pub jobs: Jobs,
 }
 
 impl Ctx {
     pub fn new(ws: Workspace, run_allow: Vec<String>) -> Self {
         trash::purge(&ws.dir, true);
-        Self { ws, reads: HashMap::new(), undo: vec![], run_allow }
+        Self { ws, reads: HashMap::new(), undo: vec![], run_allow, jobs: Jobs::default() }
     }
 }
 
-/// Undo dies with the session, so its parked directories go too.
+/// Undo dies with the session, so its parked directories go too; jobs are
+/// killed when the `jobs` field drops right after.
 impl Drop for Ctx {
     fn drop(&mut self) {
         trash::purge(&self.ws.dir, false);
@@ -63,6 +68,8 @@ pub enum Outcome {
     Write(Batch),
     Exec(Exec),
     Fetch(Fetch),
+    /// Waits on a background job: async, so the agent performs it.
+    Wait { id: usize, secs: u64 },
 }
 
 pub trait Tool {
@@ -83,6 +90,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(grep::Grep),
         Box::new(list_dir::ListDir),
         Box::new(run::Run),
+        Box::new(process::Process),
         Box::new(git::Git),
         Box::new(web_fetch::WebFetch),
     ]
@@ -125,6 +133,7 @@ pub mod tests {
             Outcome::Write(batch) => change::apply(ctx, batch),
             Outcome::Exec(ex) => Ok(format!("exec {} {:?}", ex.program, ex.args)),
             Outcome::Fetch(f) => Ok(format!("fetch {}", f.url)),
+            Outcome::Wait { id, secs } => Ok(format!("wait {id} {secs}")),
         }
     }
 }

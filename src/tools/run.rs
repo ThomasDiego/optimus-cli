@@ -40,6 +40,8 @@ struct Args {
     timeout: Option<u64>,
     #[serde(default)]
     net: bool,
+    #[serde(default)]
+    background: bool,
 }
 
 fn denied(cmd: &str, args: &[String]) -> Option<String> {
@@ -67,7 +69,8 @@ impl Tool for Run {
                     "args": {"type": "array", "items": {"type": "string"}},
                     "dir": {"type": "string", "description": "working dir, default root"},
                     "timeout": {"type": "integer", "description": "seconds, default 120"},
-                    "net": {"type": "boolean", "description": "network access (downloads); user must approve"}
+                    "net": {"type": "boolean", "description": "network access (downloads); user must approve"},
+                    "background": {"type": "boolean", "description": "for dev servers, watchers and long jobs (minutes): returns early output; follow with process output+wait"}
                 },
                 "required": ["cmd"]
             }),
@@ -90,7 +93,7 @@ impl Tool for Run {
         // Without network, cargo resolves from its local cache at once instead
         // of retrying the blocked registry for seconds.
         let env: &'static [_] = if a.net { &[] } else { &[("CARGO_NET_OFFLINE", "true")] };
-        Ok(Outcome::Exec(Exec { net: a.net, env, ..Exec::new(a.cmd, a.args, dir, timeout) }))
+        Ok(Outcome::Exec(Exec { net: a.net, env, background: a.background, ..Exec::new(a.cmd, a.args, dir, timeout) }))
     }
 }
 

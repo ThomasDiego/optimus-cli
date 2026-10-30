@@ -113,6 +113,9 @@ impl<P: Provider> Agent<P> {
                 if ask && !self.approve(Approval::Exec { cmd: ex.display(), net: ex.net }).await {
                     return Err(DENIED.into());
                 }
+                if ex.background {
+                    return ctx.jobs.start(&ex, &ctx.ws.root).await;
+                }
                 let before = track::snapshot(&ctx.ws);
                 let out = exec::run(&ex, &ctx.ws.root).await?;
                 Ok(track::annotate(out, &track::changes(&before, &track::snapshot(&ctx.ws))))
@@ -123,6 +126,7 @@ impl<P: Provider> Agent<P> {
                 }
                 web::fetch(&f).await
             }
+            Outcome::Wait { id, secs } => ctx.jobs.wait(id, secs).await,
         }
     }
 
