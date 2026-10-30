@@ -4,6 +4,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::agent::Agent;
+use crate::message::{kilo, money};
 use crate::provider::Provider;
 use crate::tools::{Ctx, truncate};
 use crate::ui::{Approval, Event, brief};
@@ -32,7 +33,7 @@ pub async fn run<P: Provider>(
     }
     println!();
     let u = result?;
-    eprintln!("↑{} ↓{} cache {} ${:.4}", u.input, u.output, u.cached, u.cost);
+    eprintln!("↑{} ↓{} cache {} {}", kilo(u.input), kilo(u.output), kilo(u.cached), money(u.cost));
     Ok(())
 }
 
@@ -51,11 +52,12 @@ fn show(ev: Event) {
         Event::Diff { path, .. } => eprintln!("  modifié : {}", path.display()),
         Event::Approve { req, reply } => {
             let _ = reply.send(false);
-            let what = match req {
-                Approval::Write { path, .. } => format!("écriture de {}", path.display()),
-                Approval::Exec { cmd } => format!("exécution de {cmd}"),
+            let (what, hint) = match req {
+                Approval::Write { path, .. } => (format!("écriture de {}", path.display()), "--mode edit ou auto"),
+                Approval::Exec { cmd, net: false } => (format!("exécution de {cmd}"), "--mode auto"),
+                Approval::Exec { cmd, net: true } => (format!("exécution de {cmd}"), "réseau : confirmation interactive obligatoire"),
             };
-            eprintln!("  ✗ {what} refusée (--mode edit ou auto pour l'autoriser)");
+            eprintln!("  ✗ {what} refusée ({hint})");
         }
     }
 }

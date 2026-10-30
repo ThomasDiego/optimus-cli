@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use super::app::App;
 use super::input::{self, ACCENT, MAX_SUGGESTIONS};
+use crate::message::{kilo, money};
 use crate::permission::Mode;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -85,13 +86,17 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         Mode::Edit => Style::new().fg(Color::Yellow),
         Mode::Auto => Style::new().fg(Color::Red),
     };
+    // `ctx` is the conversation size now; ↑/↓ are billed totals, which count
+    // the context again on every request.
     let u = app.usage;
     let cache = (u.cached * 100).checked_div(u.input).unwrap_or(0);
+    let ctx = format!("ctx {}", kilo(app.context));
     let tokens = format!("↑{} ↓{}", kilo(u.input), kilo(u.output));
-    let cost = format!("${:.4}", u.cost);
+    let cost = money(u.cost);
     let candidates = [
-        vec![app.model.clone(), tokens.clone(), format!("cache {cache}%"), cost.clone()],
-        vec![tokens, cost.clone()],
+        vec![app.model.clone(), ctx.clone(), tokens.clone(), format!("cache {cache}%"), cost.clone()],
+        vec![ctx.clone(), tokens, cost.clone()],
+        vec![ctx, cost.clone()],
         vec![cost],
         vec![],
     ];
@@ -102,10 +107,6 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         .find(|r| mode_label.chars().count() + r.chars().count() <= width)
         .unwrap_or_default();
     Line::from(vec![Span::styled(mode_label, mode_style), Span::styled(rest, dim())])
-}
-
-fn kilo(n: u64) -> String {
-    if n >= 1000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() }
 }
 
 #[cfg(test)]

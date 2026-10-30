@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::Agent;
 use crate::command::{self, Action};
+use crate::message::{kilo, money};
 use crate::provider::Provider;
 use crate::tools::{Ctx, truncate};
 use crate::ui::{Approval, Event, brief};
@@ -54,7 +55,7 @@ pub async fn run<P: Provider>(
             show(ev, &mut lines).await;
         }
         match result {
-            Ok(u) => println!("\n{DIM}↑{} ↓{} cache {} ${:.4}{RESET}", u.input, u.output, u.cached, u.cost),
+            Ok(u) => println!("\n{DIM}↑{} ↓{} cache {} {}{RESET}", kilo(u.input), kilo(u.output), kilo(u.cached), money(u.cost)),
             Err(e) => eprintln!("\n{RED}{e:#}{RESET}"),
         }
     }
@@ -77,7 +78,7 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
         Event::Approve { req, reply } => {
             match &req {
                 Approval::Write { path, diff } => print_diff(&path.display().to_string(), diff),
-                Approval::Exec { cmd } => println!("{cmd}"),
+                Approval::Exec { cmd, .. } => println!("{cmd}"),
             }
             print!("Autoriser ? [o/N] ");
             let _ = io::stdout().flush();

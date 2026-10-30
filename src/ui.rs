@@ -20,7 +20,7 @@ pub enum Event {
 
 pub enum Approval {
     Write { path: PathBuf, diff: String },
-    Exec { cmd: String },
+    Exec { cmd: String, net: bool },
 }
 
 /// One-line human summary of a tool call: `read_file src/main.rs`.
