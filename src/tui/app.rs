@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use tokio::sync::oneshot;
 
 use super::markdown::Markdown;
@@ -42,6 +42,8 @@ pub struct App {
     pub busy: bool,
     /// What the agent is doing now, animated in the live row.
     pub activity: String,
+    /// Lines added/removed by an unprompted write, shown on its result line.
+    stat: Option<(usize, usize)>,
     pub started: Instant,
     pub approval: Option<(String, oneshot::Sender<bool>)>,
     pub usage: Usage,
@@ -53,6 +55,12 @@ pub struct App {
 
 fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
+}
+
+/// Added and removed lines of a unified diff.
+fn stat(diff: &str) -> (usize, usize) {
+    let count = |sign: &str, header: &str| diff.lines().filter(|l| l.starts_with(sign) && !l.starts_with(header)).count();
+    (count("+", "+++"), count("-", "---"))
 }
 
 impl App {
@@ -69,6 +77,7 @@ impl App {
             out: Transcript::default(),
             busy: false,
             activity: String::new(),
+            stat: None,
             started: Instant::now(),
             approval: None,
             usage: Usage::default(),
@@ -97,11 +106,17 @@ impl App {
             }
             Event::ToolResult { ok, output } => {
                 self.activity = "Réflexion".into();
+                if let Some((add, del)) = self.stat.take().filter(|&s| ok && s != (0, 0)) {
+                    let (add, del) = (format!("+{add}"), format!("-{del}"));
+                    let spans = vec![Span::styled("  ⎿ ", dim()), Span::styled(add, Color::Green), Span::raw(" "), Span::styled(del, Color::Red)];
+                    return self.out.push(Line::from(spans));
+                }
                 let first = truncate(output.lines().next().unwrap_or(""), 120).replace('\t', "  ");
                 let style = if ok { dim() } else { Style::new().fg(Color::Red) };
                 self.out.push(Line::styled(format!("  ⎿ {first}"), style));
             }
-            Event::Diff { label, diff } => self.push_diff(&label, &diff),
+            // The user did not ask to review it: a line count is enough.
+            Event::Diff { diff, .. } => self.stat = Some(stat(&diff)),
             Event::Approve { req, reply } => {
                 self.flush_partial();
                 let prompt = match req {
@@ -347,5 +362,14 @@ impl App {
     pub fn say(&mut self, msg: &str, error: bool) {
         let style = if error { Style::new().fg(Color::Red) } else { dim() };
         self.out.push(Line::styled(msg.to_string(), style));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn counts_diff_lines_without_headers() {
+        assert_eq!(super::stat("--- a\n+++ b\n@@ -1 +1,2 @@\n-x\n+y\n+z\n ctx\n"), (2, 1));
+        assert_eq!(super::stat("(binary)"), (0, 0));
     }
 }
