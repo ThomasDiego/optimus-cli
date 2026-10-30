@@ -2,6 +2,7 @@ pub mod change;
 mod edit;
 mod file;
 mod fs_ops;
+mod git;
 mod glob;
 mod grep;
 mod list_dir;
@@ -68,6 +69,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(grep::Grep),
         Box::new(list_dir::ListDir),
         Box::new(run::Run),
+        Box::new(git::Git),
     ]
 }
 

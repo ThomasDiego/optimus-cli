@@ -87,7 +87,7 @@ impl Tool for Run {
         }
         let dir = ctx.ws.walk_base(a.dir.as_deref())?;
         let timeout = Duration::from_secs(a.timeout.unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT));
-        Ok(Outcome::Exec(Exec { program: a.cmd, args: a.args, dir, timeout, net: a.net }))
+        Ok(Outcome::Exec(Exec { net: a.net, ..Exec::new(a.cmd, a.args, dir, timeout) }))
     }
 }
 
