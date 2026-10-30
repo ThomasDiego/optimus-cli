@@ -47,6 +47,13 @@ longjob|grep -q 'TOTAL=42' "$ANSWER"|Lance python3 scripts/count.py (c'est long)
 server|grep -q 'http://127.0.0.1:' "$ANSWER"|Lance node server.js en arrière-plan et donne-moi son URL.
 forever|grep -qi watching "$ANSWER"|Lance python3 watch.py et dis-moi ce qu'il affiche.
 spam|grep -q 'line 50000' "$ANSWER"|Lance python3 spam.py et donne-moi sa dernière ligne.
+# Other stacks and larger jobs.
+pyfix|cd py && python3 -m unittest test_stats && grep -q 'assertEqual(mean(\[1, 2, 3\]), 2)' test_stats.py|Les tests Python de py/ échouent (python3 -m unittest), corrige le bug sans toucher aux tests.
+nodefeat|cd web && node --test && grep -q truncate slug.js|Dans web/, ajoute à slug.js une fonction exportée truncate(text, n) avec son test, puis lance les tests.
+warnings|test -z "$(cargo build -q 2>&1)"|Corrige tous les warnings du compilateur.
+manyfiles|! grep -rq 'utils::shout' src/handlers && grep -q 'fn yell' src/utils.rs && cargo build -q|Dans src/handlers, remplace tous les appels à crate::utils::shout par crate::utils::yell (ajoute yell à utils, même comportement) et vérifie que ça compile.
+readonly|git diff --quiet HEAD -- src/lib.rs src/utils.rs Cargo.toml && test -s "$ANSWER"|Est-ce que add gère le débordement ? Ne modifie rien.
+vague|cargo test -q|Améliore un peu ce projet.
 # Edge cases.
 binary|test -e logo.png|Que contient logo.png ?
 envexample|grep -q DATABASE_URL "$ANSWER"|Quelles variables sont attendues dans .env.example ?

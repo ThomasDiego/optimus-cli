@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::GlobBuilder;
@@ -33,31 +34,12 @@ impl Tool for Glob {
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
-        let base = ctx.ws.walk_base(a.path.as_deref())?;
-        // A literal leading dir ("node_modules/three/*.json") becomes the walk
-        // base: an ignored dir is then searched when explicitly targeted.
-        let parts: Vec<&str> = a.pattern.split('/').collect();
-        let literal = parts[..parts.len() - 1].iter().take_while(|p| !p.contains(['*', '?', '[', '{'])).count();
-        let (base, pattern) = match ctx.ws.walk_base(Some(&base.join(parts[..literal].join("/")).to_string_lossy())) {
-            Ok(dir) if literal > 0 && dir.is_dir() => (dir, parts[literal..].join("/")),
-            _ => (base, a.pattern.clone()),
-        };
-        let glob = GlobBuilder::new(&pattern)
-            .literal_separator(true)
-            .build()
-            .map_err(|e| format!("invalid pattern: {e}"))?
-            .compile_matcher();
-        let mut hits: Vec<(SystemTime, String)> = ctx
-            .ws
-            .walker(&base)
-            .build()
-            .flatten()
-            .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-            .filter(|e| e.path().strip_prefix(&base).is_ok_and(|p| glob.is_match(p)))
-            .map(|e| {
-                let mtime = e.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(UNIX_EPOCH);
-                let secret = if is_secret(e.path()) { " (secret, unreadable)" } else { "" };
-                (mtime, format!("{}{secret}", ctx.ws.display(e.path())))
+        let mut hits: Vec<(SystemTime, String)> = files(ctx, &a.pattern, a.path.as_deref())?
+            .into_iter()
+            .map(|p| {
+                let mtime = p.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(UNIX_EPOCH);
+                let secret = if is_secret(&p) { " (secret, unreadable)" } else { "" };
+                (mtime, format!("{}{secret}", ctx.ws.display(&p)))
             })
             .collect();
         if hits.is_empty() {
@@ -66,6 +48,33 @@ impl Tool for Glob {
         hits.sort_by_key(|h| std::cmp::Reverse(h.0));
         Ok(Outcome::Done(capped(hits.into_iter().map(|h| h.1).collect(), CAP)))
     }
+}
+
+/// Absolute paths of the files matching `pattern` under `path`.
+pub fn files(ctx: &Ctx, pattern: &str, path: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    let base = ctx.ws.walk_base(path)?;
+    // A literal leading dir ("node_modules/three/*.json") becomes the walk
+    // base: an ignored dir is then searched when explicitly targeted.
+    let parts: Vec<&str> = pattern.split('/').collect();
+    let literal = parts[..parts.len() - 1].iter().take_while(|p| !p.contains(['*', '?', '[', '{'])).count();
+    let (base, pattern) = match ctx.ws.walk_base(Some(&base.join(parts[..literal].join("/")).to_string_lossy())) {
+        Ok(dir) if literal > 0 && dir.is_dir() => (dir, parts[literal..].join("/")),
+        _ => (base, pattern.to_string()),
+    };
+    let glob = GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .build()
+        .map_err(|e| format!("invalid pattern: {e}"))?
+        .compile_matcher();
+    Ok(ctx
+        .ws
+        .walker(&base)
+        .build()
+        .flatten()
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter(|e| e.path().strip_prefix(&base).is_ok_and(|p| glob.is_match(p)))
+        .map(|e| e.into_path())
+        .collect())
 }
 
 #[cfg(test)]
