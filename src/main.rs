@@ -13,6 +13,7 @@ mod tools;
 mod track;
 mod tui;
 mod ui;
+mod web;
 
 use std::io::{self, IsTerminal};
 

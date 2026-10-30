@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::exec::Review;
-use crate::{exec, track};
+use crate::{exec, track, web};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
 use crate::provider::{Provider, Request};
@@ -107,6 +107,12 @@ impl<P: Provider> Agent<P> {
                 let before = track::snapshot(&ctx.ws);
                 let out = exec::run(&ex, &ctx.ws.root).await?;
                 Ok(track::annotate(out, &track::changes(&before, &track::snapshot(&ctx.ws))))
+            }
+            Outcome::Fetch(f) => {
+                if self.mode.get().needs_approval(Kind::ExecNet) && !self.approve(Approval::Fetch { url: f.url.clone() }).await {
+                    return Err(DENIED.into());
+                }
+                web::fetch(&f).await
             }
         }
     }

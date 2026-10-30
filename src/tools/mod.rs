@@ -9,6 +9,7 @@ mod list_dir;
 mod matching;
 mod read;
 mod run;
+mod web_fetch;
 mod write;
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use serde::de::DeserializeOwned;
 use crate::exec::Exec;
 use crate::message::ToolDef;
 use crate::sandbox::Workspace;
+use crate::web::Fetch;
 
 pub use change::Batch;
 pub use file::truncate;
@@ -49,6 +51,7 @@ pub enum Outcome {
     Done(String),
     Write(Batch),
     Exec(Exec),
+    Fetch(Fetch),
 }
 
 pub trait Tool {
@@ -70,6 +73,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(list_dir::ListDir),
         Box::new(run::Run),
         Box::new(git::Git),
+        Box::new(web_fetch::WebFetch),
     ]
 }
 
@@ -109,6 +113,7 @@ pub mod tests {
             Outcome::Done(s) => Ok(s),
             Outcome::Write(batch) => change::apply(ctx, batch),
             Outcome::Exec(ex) => Ok(format!("exec {} {:?}", ex.program, ex.args)),
+            Outcome::Fetch(f) => Ok(format!("fetch {}", f.url)),
         }
     }
 }

@@ -110,6 +110,7 @@ impl App {
                         "Appliquer ? (o/n)".to_string()
                     }
                     Approval::Exec { cmd, .. } => format!("Exécuter « {cmd} » ? (o/n)"),
+                    Approval::Fetch { url } => format!("Lire « {url} » ? (o/n)"),
                 };
                 self.approval = Some((prompt, reply));
             }
