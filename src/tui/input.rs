@@ -48,8 +48,46 @@ pub fn render_box(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
+    if app.busy && app.approval.is_none() {
+        comet(f.buffer_mut(), area, app.started.elapsed().as_millis() as usize);
+    }
     if app.approval.is_none() {
         f.set_cursor_position(Position::new(inner.x + col as u16, inner.y + (row - top) as u16));
+    }
+}
+
+/// One lap around the box, whatever its size.
+const LAP_MS: usize = 2400;
+
+/// Border cells clockwise from the top-left corner.
+fn perimeter(a: Rect) -> Vec<(u16, u16)> {
+    let (x1, y1) = (a.right().saturating_sub(1), a.bottom().saturating_sub(1));
+    let top = (a.x..=x1).map(|x| (x, a.y));
+    let right = (a.y + 1..=y1).map(|y| (x1, y));
+    let bottom = (a.x..x1).rev().map(|x| (x, y1));
+    let left = (a.y + 1..y1).rev().map(|y| (a.x, y));
+    top.chain(right).chain(bottom).chain(left).collect()
+}
+
+/// A light running around the border while a turn is in progress: a bright
+/// head and a fading tail over the dim frame.
+fn comet(buf: &mut ratatui::buffer::Buffer, area: Rect, ms: usize) {
+    let cells = perimeter(area);
+    let n = cells.len();
+    if n == 0 {
+        return;
+    }
+    let head = ms * n / LAP_MS % n;
+    let tail = (n / 6).max(4);
+    for (i, &(x, y)) in cells.iter().enumerate() {
+        let behind = (head + n - i) % n;
+        let style = match behind {
+            d if d < 2 => Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            d if d < tail / 2 => Style::new().fg(ACCENT),
+            d if d < tail => Style::new().fg(ACCENT).add_modifier(Modifier::DIM),
+            _ => continue,
+        };
+        buf[(x, y)].set_style(style);
     }
 }
 
@@ -125,6 +163,14 @@ fn wrap(input: &str, cursor: usize, width: usize) -> (Vec<String>, (usize, usize
 #[cfg(test)]
 mod tests {
     use super::wrap;
+
+    #[test]
+    fn perimeter_visits_each_border_cell_once() {
+        let cells = super::perimeter(ratatui::layout::Rect::new(2, 1, 5, 3));
+        let unique: std::collections::BTreeSet<_> = cells.iter().collect();
+        assert_eq!((cells.len(), unique.len()), (12, 12));
+        assert_eq!((cells[0], cells[4], cells[6], cells[11]), ((2, 1), (6, 1), (6, 3), (2, 2)));
+    }
 
     #[test]
     fn wraps_and_places_cursor() {
