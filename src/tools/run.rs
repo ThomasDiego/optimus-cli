@@ -59,7 +59,7 @@ impl Tool for Run {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "run",
-            description: "Run an allowed program (cargo, npm, pytest…). No shell: no pipes, globs or &&. Offline unless net. Returns exit code, output and changed files.",
+            description: "Run an allowed program (cargo, npm, pytest…). No shell: no pipes, globs or &&. Offline unless net; cargo then uses its local cache, try that first. Returns exit code, output and changed files.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -87,7 +87,10 @@ impl Tool for Run {
         }
         let dir = ctx.ws.walk_base(a.dir.as_deref())?;
         let timeout = Duration::from_secs(a.timeout.unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT));
-        Ok(Outcome::Exec(Exec { net: a.net, ..Exec::new(a.cmd, a.args, dir, timeout) }))
+        // Without network, cargo resolves from its local cache at once instead
+        // of retrying the blocked registry for seconds.
+        let env: &'static [_] = if a.net { &[] } else { &[("CARGO_NET_OFFLINE", "true")] };
+        Ok(Outcome::Exec(Exec { net: a.net, env, ..Exec::new(a.cmd, a.args, dir, timeout) }))
     }
 }
 
@@ -105,6 +108,18 @@ mod tests {
         assert!(call(&mut c, "run", json!({"cmd": "bash"})).unwrap_err().contains("not allowed; allowed: cargo"));
         assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).is_err());
         assert!(call(&mut c, "run", json!({"cmd": "cargo", "dir": ".."})).is_err());
+    }
+
+    #[test]
+    fn cargo_is_offline_without_net() {
+        let mut c = ctx("run-offline", &[]);
+        let tool = crate::tools::all().into_iter().find(|t| t.def().name == "run").unwrap();
+        let env = |c: &mut crate::tools::Ctx, net: bool| match tool.run(c, &json!({"cmd": "cargo", "net": net}).to_string()).unwrap() {
+            crate::tools::Outcome::Exec(ex) => ex.env,
+            _ => unreachable!(),
+        };
+        assert_eq!(env(&mut c, false), [("CARGO_NET_OFFLINE", "true")]);
+        assert!(env(&mut c, true).is_empty());
     }
 
     #[test]

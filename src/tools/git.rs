@@ -56,7 +56,7 @@ struct Args {
     #[serde(default)]
     all: bool,
     #[serde(default)]
-    full: bool,
+    stat: bool,
     #[serde(default)]
     create: bool,
 }
@@ -65,7 +65,7 @@ impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff gives --stat unless paths or full. restore discards working changes.",
+            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -77,7 +77,7 @@ impl Tool for Git {
                     "n": {"type": "integer", "description": "log entries, default 10"},
                     "staged": {"type": "boolean", "description": "diff/restore the index"},
                     "all": {"type": "boolean", "description": "add every change (secrets excluded)"},
-                    "full": {"type": "boolean", "description": "full diff instead of --stat"},
+                    "stat": {"type": "boolean", "description": "diff: stat only, for large changes"},
                     "create": {"type": "boolean", "description": "switch: create the branch"}
                 },
                 "required": ["op"]
@@ -108,9 +108,8 @@ impl Tool for Git {
                 if a.staged {
                     push("--cached");
                 }
-                if paths.is_empty() && !a.full {
-                    push("--stat");
-                }
+                // Stat first: it survives output clipping when the patch is long.
+                push(if a.stat { "--stat" } else { "--patch-with-stat" });
                 Review::None
             }
             Op::Log => {
@@ -207,8 +206,9 @@ mod tests {
     fn builds_fixed_commands_and_rejects_injection() {
         let mut c = ctx("git", &[("a.rs", "")]);
         assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap(), ("status --short --branch".into(), false));
-        assert_eq!(plan(&mut c, json!({"op": "diff"})).unwrap().0, "diff --no-ext-diff --no-textconv --stat");
-        assert_eq!(plan(&mut c, json!({"op": "diff", "paths": ["a.rs"]})).unwrap().0, "diff --no-ext-diff --no-textconv -- a.rs");
+        assert_eq!(plan(&mut c, json!({"op": "diff"})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat");
+        assert_eq!(plan(&mut c, json!({"op": "diff", "stat": true})).unwrap().0, "diff --no-ext-diff --no-textconv --stat");
+        assert_eq!(plan(&mut c, json!({"op": "diff", "paths": ["a.rs"]})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat -- a.rs");
         assert_eq!(plan(&mut c, json!({"op": "commit", "message": "--amend"})).unwrap(), ("commit -m --amend".into(), true));
         assert!(plan(&mut c, json!({"op": "add", "all": true})).unwrap().0.contains(":(exclude,glob)**/.env"));
         assert!(plan(&mut c, json!({"op": "show", "rev": "--output=/tmp/x"})).is_err());
