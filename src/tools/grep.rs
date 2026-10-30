@@ -17,10 +17,9 @@ const MAX_CONTEXT: usize = 10;
 
 pub struct Grep;
 
-#[derive(Deserialize, Default, Clone, Copy)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum Mode {
-    #[default]
     Files,
     Content,
     Count,
@@ -31,8 +30,7 @@ struct Args {
     pattern: String,
     path: Option<String>,
     glob: Option<String>,
-    #[serde(default)]
-    mode: Mode,
+    mode: Option<Mode>,
     #[serde(default)]
     i: bool,
     #[serde(default)]
@@ -75,7 +73,7 @@ impl Tool for Grep {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "grep",
-            description: "Regex search in files. mode: files (default), count, content (path, then line:text per match; context adds surrounding line-text, saving a read_file).",
+            description: "Regex search in files. mode: files (default; content if path is a file), count (per file; tally values with python3 -c), content (path, then line:text per match; context adds surrounding line-text, saving a read_file).",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -102,6 +100,8 @@ impl Tool for Grep {
             Some(g) => Some(Glob::new(g).map_err(|e| format!("invalid glob: {e}"))?.compile_matcher()),
             None => None,
         };
+        // Listing the one file searched answers nothing: show its lines.
+        let mode = a.mode.unwrap_or(if base.is_file() { Mode::Content } else { Mode::Files });
         let around = a.context.min(MAX_CONTEXT);
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(0))
@@ -124,7 +124,7 @@ impl Tool for Grep {
                 }
             }
             let shown = ctx.ws.display(path);
-            match a.mode {
+            match mode {
                 Mode::Files => {
                     let mut hit = false;
                     let _ = searcher.search_path(&matcher, path, UTF8(|_, _| { hit = true; Ok(false) }));
@@ -151,7 +151,7 @@ impl Tool for Grep {
             }
             if out.len() > CAP {
                 out.truncate(CAP);
-                out.push("[truncated, narrow the search]".into());
+                out.push("[truncated: narrow the search, or tally with python3 -c]".into());
                 break;
             }
         }
@@ -184,6 +184,8 @@ mod tests {
         assert_eq!(call(&mut c, "grep", json!({"pattern": "fn", "glob": "*.rs", "mode": "count"})).unwrap(), "src/a.rs:2");
         assert_eq!(call(&mut c, "grep", json!({"pattern": "X\\(", "i": true, "mode": "content"})).unwrap(), "src/a.rs\n2:fn x() {}");
         assert_eq!(call(&mut c, "grep", json!({"pattern": "SECRET"})).unwrap(), "no match");
+        assert_eq!(call(&mut c, "grep", json!({"pattern": "x", "path": "src/a.rs"})).unwrap(), "src/a.rs\n2:fn x() {}");
+        assert_eq!(call(&mut c, "grep", json!({"pattern": "x", "path": "src/a.rs", "mode": "files"})).unwrap(), "src/a.rs");
     }
 
     #[test]

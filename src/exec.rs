@@ -228,6 +228,14 @@ mod tests {
 
         let env = run(&exec("/bin/cat", &[".env"], &root, 5), &root).await.unwrap();
         assert!(!env.contains("KEY=1"), "{env}");
+        std::fs::create_dir(root.join("certs")).unwrap();
+        for f in ["certs/server.key", ".npmrc", "id_ed25519"] {
+            std::fs::write(root.join(f), "SECRET").unwrap();
+            let out = run(&exec("/bin/cat", &[f], &root, 5), &root).await.unwrap();
+            assert!(!out.contains("SECRET"), "{f}: {out}");
+        }
+        let ca = run(&exec("/bin/cat", &["/private/etc/ssl/cert.pem"], &root, 5), &root).await.unwrap();
+        assert!(ca.starts_with("exit 0"), "system CA unreadable: {ca}");
 
         let home_list = run(&exec("/bin/ls", &[home.to_str().unwrap()], &root, 5), &root).await.unwrap();
         assert!(!home_list.starts_with("exit 0"), "HOME readable: {home_list}");

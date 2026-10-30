@@ -1,5 +1,3 @@
-use std::io::{self, Write};
-
 use anyhow::Result;
 use tokio::sync::mpsc;
 
@@ -17,48 +15,38 @@ pub async fn run<P: Provider>(
     events: &mut mpsc::UnboundedReceiver<Event>,
     prompt: String,
 ) -> Result<()> {
-    let mut flow = Flow::Start;
+    let mut text = String::new();
     let result = {
         let turn = agent.turn(prompt, ctx);
         tokio::pin!(turn);
         loop {
             tokio::select! {
                 biased;
-                Some(ev) = events.recv() => show(ev, &mut flow),
+                Some(ev) = events.recv() => show(ev, &mut text),
                 r = &mut turn => break r,
             }
         }
     };
     while let Ok(ev) = events.try_recv() {
-        show(ev, &mut flow);
+        show(ev, &mut text);
     }
-    println!();
+    println!("{}", text.trim());
     let u = result?;
     eprintln!("↑{} ↓{} cache {} {}", kilo(u.input), kilo(u.output), kilo(u.cached), money(u.cost));
     Ok(())
 }
 
-/// Where stdout stands, so texts from separate steps do not run together.
-#[derive(PartialEq)]
-enum Flow {
-    Start,
-    Text,
-    Gap,
-}
-
-fn show(ev: Event, flow: &mut Flow) {
+/// `text` holds the current step's text: only the last step's is the answer,
+/// earlier ones are narration and go to stderr.
+fn show(ev: Event, text: &mut String) {
     match ev {
-        Event::Text(t) => {
-            let sep = if *flow == Flow::Gap { "\n\n" } else { "" };
-            print!("{sep}{t}");
-            let _ = io::stdout().flush();
-            *flow = Flow::Text;
-        }
+        Event::Text(t) => text.push_str(&t),
         Event::Usage(_) | Event::Drafting { .. } => {}
         Event::ToolCall(call) => {
-            if *flow == Flow::Text {
-                *flow = Flow::Gap;
+            if !text.trim().is_empty() {
+                eprintln!("{}", text.trim());
             }
+            text.clear();
             eprintln!("› {}", brief(&call));
         }
         Event::ToolResult { ok, output } => {

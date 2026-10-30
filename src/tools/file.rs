@@ -94,7 +94,7 @@ pub fn ensure_fresh(ctx: &mut Ctx, rel: &Path, current: &str, shown: &str) -> Re
         Some(s) if s.hash != hash(current.as_bytes()) => "changed since your last read, not by you",
         Some(_) => return Ok(()),
     };
-    match super::read::read_one(ctx, shown, None, None) {
+    match super::read::read_one(ctx, shown, None, None, false) {
         Ok(view) => Err(format!("{shown}: {why}; retry against its current content:\n{view}")),
         Err(_) => Err(format!("{shown}: {why}, read it first")),
     }

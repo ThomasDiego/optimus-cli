@@ -102,14 +102,15 @@ impl Workspace {
     }
 }
 
-/// Files whose content must never reach the LLM provider.
+/// Files whose content must never reach the LLM provider. Mirrored in
+/// seatbelt.sb and git's SECRET_EXCLUDES: keep the three in sync.
 pub fn is_secret(p: &Path) -> bool {
     let Some(name) = p.file_name().and_then(|n| n.to_str()) else { return false };
     let env = name == ".env"
         || (name.starts_with(".env.") && !matches!(name, ".env.example" | ".env.sample" | ".env.template"));
-    env || name.ends_with(".pem")
-        || name.ends_with(".key")
+    env || [".pem", ".key", ".p12", ".pfx"].iter().any(|e| name.ends_with(e))
         || ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"].iter().any(|k| name.starts_with(k))
+        || matches!(name, ".npmrc" | ".pypirc" | ".netrc" | ".git-credentials")
 }
 
 #[cfg(test)]
@@ -152,6 +153,10 @@ pub mod tests {
         assert!(ws.rel(".env").is_err());
         assert!(ws.rel("innocent").is_err());
         assert!(ws.rel(".env.example").is_ok());
+        for p in [".npmrc", "certs/a.p12", "id_rsa.pub", ".git-credentials"] {
+            assert!(ws.rel(p).is_err(), "{p} readable");
+        }
+        assert!(ws.rel("keys.rs").is_ok());
         assert!(ws.rel_write(".git/config").is_err());
         assert!(ws.rel_write("./src/main.rs").is_ok());
     }
