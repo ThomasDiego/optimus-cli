@@ -12,6 +12,8 @@ pub struct Change {
     pub rel: PathBuf,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
+    /// An empty directory: present is `Some(empty)`, contents are never stored.
+    pub dir: bool,
 }
 
 /// Changes prepared by a tool, applied all or nothing once permitted
@@ -28,11 +30,12 @@ pub struct Batch {
 pub struct Snapshot {
     rel: PathBuf,
     old: Option<Vec<u8>>,
+    dir: bool,
 }
 
 impl Batch {
     pub fn single(rel: PathBuf, old: Option<Vec<u8>>, new: Option<Vec<u8>>, ok: String) -> Self {
-        Self { changes: vec![Change { rel, old, new }], ok, known: true }
+        Self { changes: vec![Change { rel, old, new, dir: false }], ok, known: true }
     }
 
     /// What the user is asked about: `src/a.rs` or `a.rs → b.rs`.
@@ -56,6 +59,9 @@ impl Batch {
 
 impl Change {
     fn diff(&self) -> String {
+        if self.dir {
+            return format!("{}/ (empty directory)", self.rel.display());
+        }
         let text = |b: &Option<Vec<u8>>| std::str::from_utf8(b.as_deref().unwrap_or(b"")).map(str::to_string).ok();
         match (text(&self.old), text(&self.new)) {
             (Some(old), Some(new)) => TextDiff::from_lines(&old, &new).unified_diff().context_radius(2).to_string(),
@@ -74,9 +80,9 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
         }
     }
     for (i, ch) in batch.changes.iter().enumerate() {
-        if let Err(e) = put(ctx, &ch.rel, ch.new.as_deref()) {
+        if let Err(e) = put(ctx, &ch.rel, ch.new.as_deref(), ch.dir) {
             for done in batch.changes[..i].iter().rev() {
-                let _ = put(ctx, &done.rel, done.old.as_deref());
+                let _ = put(ctx, &done.rel, done.old.as_deref(), done.dir);
             }
             return Err(e);
         }
@@ -85,7 +91,7 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
         if let Some(turn) = ctx.undo.last_mut()
             && !turn.iter().any(|s| s.rel == ch.rel)
         {
-            turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old });
+            turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old, dir: ch.dir });
         }
         match ch.new {
             Some(new) if batch.known => {
@@ -101,16 +107,23 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
 
 fn current(ctx: &Ctx, ch: &Change) -> Result<Option<Vec<u8>>, String> {
     let shown = ch.rel.display().to_string();
-    match ctx.ws.dir.try_exists(&ch.rel).map_err(|e| file::io_err(&shown, e))? {
-        true => file::read_bytes(ctx, &ch.rel, &shown).map(Some),
-        false => Ok(None),
+    if !ctx.ws.dir.try_exists(&ch.rel).map_err(|e| file::io_err(&shown, e))? {
+        return Ok(None);
     }
+    if ch.dir {
+        let is_dir = ctx.ws.dir.symlink_metadata(&ch.rel).is_ok_and(|m| m.is_dir());
+        return if is_dir { Ok(Some(vec![])) } else { Err(format!("{shown}: not a directory")) };
+    }
+    file::read_bytes(ctx, &ch.rel, &shown).map(Some)
 }
 
-fn put(ctx: &Ctx, rel: &std::path::Path, data: Option<&[u8]>) -> Result<(), String> {
-    match data {
-        Some(d) => file::write_atomic(&ctx.ws.dir, rel, d),
-        None => ctx.ws.dir.remove_file(rel),
+fn put(ctx: &Ctx, rel: &std::path::Path, data: Option<&[u8]>, dir: bool) -> Result<(), String> {
+    match (data, dir) {
+        (Some(_), true) => ctx.ws.dir.create_dir_all(rel),
+        // Fails unless empty: the last guard against deleting contents.
+        (None, true) => ctx.ws.dir.remove_dir(rel),
+        (Some(d), false) => file::write_atomic(&ctx.ws.dir, rel, d),
+        (None, false) => ctx.ws.dir.remove_file(rel),
     }
     .map_err(|e| file::io_err(&rel.display().to_string(), e))
 }
@@ -134,7 +147,7 @@ pub fn undo(ctx: &mut Ctx) -> Result<Vec<PathBuf>, String> {
     let Some(turn) = ctx.undo.pop() else { return Ok(vec![]) };
     let mut restored = vec![];
     for s in turn.into_iter().rev() {
-        put(ctx, &s.rel, s.old.as_deref())?;
+        put(ctx, &s.rel, s.old.as_deref(), s.dir)?;
         // Forces a re-read: the model's view of this file is now stale.
         ctx.reads.remove(&s.rel);
         restored.push(s.rel);
@@ -181,9 +194,9 @@ mod tests {
         let mut c = ctx("rollback", &[("a.txt", "a")]);
         let batch = Batch {
             changes: vec![
-                Change { rel: "b.txt".into(), old: None, new: Some(b"b".to_vec()) },
+                Change { rel: "b.txt".into(), old: None, new: Some(b"b".to_vec()), dir: false },
                 // Removing a missing file fails after b.txt was written.
-                Change { rel: "missing/x.txt".into(), old: None, new: None },
+                Change { rel: "missing/x.txt".into(), old: None, new: None, dir: false },
             ],
             ok: "ok".into(),
             known: true,
