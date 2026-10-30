@@ -89,7 +89,6 @@ pub trait Tool {
 pub fn all() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(read::Read),
-        Box::new(outline::Outline),
         Box::new(edit::Edit),
         Box::new(replace::Replace),
         Box::new(write::Write),

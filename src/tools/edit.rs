@@ -13,20 +13,13 @@ const MAX_FILES: usize = 20;
 #[derive(Deserialize)]
 struct Args {
     path: Option<String>,
-    #[serde(default)]
-    edits: Vec<Change>,
-    #[serde(default)]
-    files: Vec<FileEdits>,
-}
-
-#[derive(Deserialize)]
-struct FileEdits {
-    path: String,
     edits: Vec<Change>,
 }
 
 #[derive(Deserialize)]
 struct Change {
+    /// Another file than the call's path: one call edits several files.
+    path: Option<String>,
     old: String,
     new: String,
     #[serde(default)]
@@ -37,70 +30,70 @@ impl Tool for Edit {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "edit_file",
-            description: "Replace exact text in files. Edits apply in order, all or none. Batch edits in one call, several files with files.",
+            description: "Replace exact text in files. Edits apply in order, all or none. Batch edits in one call, across files too.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "edits": edits_schema(),
-                    "files": {
+                    "edits": {
                         "type": "array",
-                        "description": "several files at once",
-                        "items": {"type": "object", "properties": {"path": {"type": "string"}, "edits": edits_schema()}, "required": ["path", "edits"]}
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "another file than path"},
+                                "old": {"type": "string", "description": "exact current text"},
+                                "new": {"type": "string"},
+                                "all": {"type": "boolean", "description": "replace every occurrence"}
+                            },
+                            "required": ["old", "new"]
+                        }
                     }
-                }
+                },
+                "required": ["edits"]
             }),
         }
     }
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
-        let single = a.path.map(|path| FileEdits { path, edits: a.edits });
-        let files: Vec<FileEdits> = single.into_iter().chain(a.files).collect();
-        if files.is_empty() || files.len() > MAX_FILES {
-            return Err(format!("give path and edits, or 1 to {MAX_FILES} files"));
+        if a.edits.is_empty() {
+            return Err("edits is empty".into());
+        }
+        // Group by file, first-seen order; each file's edits keep their order.
+        let mut files: Vec<(String, Vec<&Change>)> = vec![];
+        for e in &a.edits {
+            let path = e.path.as_ref().or(a.path.as_ref()).ok_or("each edit needs a path (or set path for all)")?;
+            match files.iter_mut().find(|(p, _)| p == path) {
+                Some((_, list)) => list.push(e),
+                None => files.push((path.clone(), vec![e])),
+            }
+        }
+        if files.len() > MAX_FILES {
+            return Err(format!("at most {MAX_FILES} files per call"));
         }
         let many = files.len() > 1;
         let (mut changes, mut done) = (vec![], vec![]);
-        for f in files {
+        for (path, edits) in files {
             // Errors name the file once several are edited together.
-            let tag = |e: String| if many { format!("{}: {e}", f.path) } else { e };
-            if f.edits.is_empty() {
-                return Err(tag("edits is empty".into()));
-            }
-            let rel = ctx.ws.rel_write(&f.path)?;
+            let tag = |e: String| if many { format!("{path}: {e}") } else { e };
+            let rel = ctx.ws.rel_write(&path)?;
             if changes.iter().any(|c: &change::Change| c.rel == rel) {
-                return Err(format!("{}: given twice; put all its edits in one entry", f.path));
+                return Err(format!("{path}: named two ways; use one spelling"));
             }
-            let current = file::read_text(ctx, &rel, &f.path)?;
-            file::ensure_fresh(ctx, &rel, &current, &f.path)?;
-            let updated = apply(&current, &f.edits).map_err(tag)?;
+            let current = file::read_text(ctx, &rel, &path)?;
+            file::ensure_fresh(ctx, &rel, &current, &path)?;
+            let updated = apply(&current, &edits).map_err(tag)?;
             if updated == current {
                 return Err(tag("no change".into()));
             }
-            done.push(if many { format!("{} {}", f.path, summary(&current, &updated)) } else { summary(&current, &updated) });
+            done.push(if many { format!("{path} {}", summary(&current, &updated)) } else { summary(&current, &updated) });
             changes.push(change::Change { rel, old: Some(current.into_bytes()), new: Some(updated.into_bytes()), kind: Kind::File });
         }
         Ok(Outcome::Write(Batch { changes, ok: done.join("; "), known: true }))
     }
 }
 
-fn edits_schema() -> serde_json::Value {
-    json!({
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "old": {"type": "string", "description": "exact current text"},
-                "new": {"type": "string"},
-                "all": {"type": "boolean", "description": "replace every occurrence"}
-            },
-            "required": ["old", "new"]
-        }
-    })
-}
-
-fn apply(content: &str, edits: &[Change]) -> Result<String, String> {
+fn apply(content: &str, edits: &[&Change]) -> Result<String, String> {
     let crlf = content.contains("\r\n");
     let mut text = content.to_string();
     for (k, e) in edits.iter().enumerate() {
@@ -186,9 +179,10 @@ mod tests {
     fn edits_several_files_all_or_none() {
         let mut c = ctx("edit-many", &[("lib.rs", "pub mod utils;\n"), ("main.rs", "use utils;\n"), ("x.rs", "x")]);
         call(&mut c, "read_file", json!({"paths": ["lib.rs", "main.rs", "x.rs"]})).unwrap();
-        let files = |second: &str| json!({"files": [
-            {"path": "lib.rs", "edits": [{"old": "utils", "new": "text"}]},
-            {"path": "main.rs", "edits": [{"old": second, "new": "text"}]}
+        // path is the default; an edit's own path targets another file.
+        let files = |second: &str| json!({"path": "lib.rs", "edits": [
+            {"old": "utils", "new": "text"},
+            {"path": "main.rs", "old": second, "new": "text"}
         ]});
         // One miss refuses both, and says which file.
         let err = call(&mut c, "edit_file", files("nope")).unwrap_err();

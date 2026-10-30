@@ -48,7 +48,7 @@ impl Tool for Write {
         let single = a.path.zip(a.content).map(|(path, content)| File { path, content });
         let files: Vec<File> = single.into_iter().chain(a.files).collect();
         if files.is_empty() || files.len() > MAX_FILES {
-            return Err(format!("give path and content, or 1 to {MAX_FILES} files"));
+            return Err(format!(r#"expected {{"path", "content"}} or {{"files": [{{"path", "content"}}]}}, at most {MAX_FILES} files"#));
         }
         let (mut changes, mut done) = (vec![], vec![]);
         for f in files {

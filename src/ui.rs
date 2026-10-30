@@ -95,14 +95,18 @@ pub fn brief(call: &ToolCall) -> String {
             let detail = s("message").or_else(|| s("name")).or_else(|| s("rev"));
             [Some(op), detail].into_iter().flatten().collect::<Vec<_>>().join(" ")
         }),
-        _ => s("path").or_else(|| {
-            // paths (read, delete) or files[].path (write, edit several at once).
-            let paths = match args["paths"].as_array() {
-                Some(list) => list.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
-                None => args["files"].as_array()?.iter().filter_map(|f| f["path"].as_str()).collect(),
-            };
-            Some(paths.join(", "))
-        }),
+        _ => {
+            // path, paths (read, delete), files[].path (write) or edits[].path (edit).
+            let list = |k: &str| args[k].as_array().into_iter().flatten();
+            let nested = list("files").chain(list("edits")).filter_map(|f| f["path"].as_str());
+            let mut paths: Vec<&str> = vec![];
+            for p in args["path"].as_str().into_iter().chain(list("paths").filter_map(Value::as_str)).chain(nested) {
+                if !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+            (!paths.is_empty()).then(|| paths.join(", "))
+        }
     };
     match detail {
         Some(d) => format!("{} {}", call.name, truncate(&d, 100)),
@@ -117,7 +121,8 @@ mod tests {
         let brief = |name: &str, args: &str| super::brief(&crate::message::ToolCall { id: "1".into(), name: name.into(), args: args.into() });
         assert_eq!(brief("move_file", r#"{"moves":[{"from":"a","to":"b"},{"from":"c","to":"d"}]}"#), "move_file a → b, c → d");
         assert_eq!(brief("write_file", r#"{"files":[{"path":"x.rs","content":""},{"path":"y.rs","content":""}]}"#), "write_file x.rs, y.rs");
-        assert_eq!(brief("edit_file", r#"{"path":"z.rs","edits":[]}"#), "edit_file z.rs");
+        assert_eq!(brief("edit_file", r#"{"path":"z.rs","edits":[{"old":""},{"path":"y.rs"},{"path":"z.rs"}]}"#), "edit_file z.rs, y.rs");
+        assert_eq!(brief("read_file", r#"{"paths":["a","b"]}"#), "read_file a, b");
     }
 
     #[test]

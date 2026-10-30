@@ -52,7 +52,7 @@ impl Tool for Move {
         let single = a.from.zip(a.to).map(|(from, to)| Pair { from, to });
         let pairs: Vec<Pair> = single.into_iter().chain(a.moves).collect();
         if pairs.is_empty() || pairs.len() > MAX_MOVES {
-            return Err(format!("give from and to, or 1 to {MAX_MOVES} moves"));
+            return Err(format!(r#"expected {{"from", "to"}} or {{"moves": [{{"from", "to"}}]}}, at most {MAX_MOVES} moves"#));
         }
         let (mut changes, mut gone, mut dests, mut done) = (vec![], HashSet::new(), vec![], vec![]);
         for p in &pairs {
@@ -87,7 +87,8 @@ impl Tool for Move {
 fn emptied(ctx: &Ctx, gone: &mut HashSet<PathBuf>, dests: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = gone.iter().flat_map(|p| p.ancestors().skip(1).map(Path::to_path_buf)).collect();
     dirs.retain(|d| !d.as_os_str().is_empty() && !dests.iter().any(|t| t.starts_with(d)));
-    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    // Deepest first; by path within a depth so dedup sees duplicates side by side.
+    dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()).then_with(|| a.cmp(b)));
     dirs.dedup();
     let mut out = vec![];
     for d in dirs {

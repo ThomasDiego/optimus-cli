@@ -88,21 +88,21 @@ impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff and show give stat + patch (show a commit, so no extra step to see what it changed). commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged. revert/cherry_pick commit the undo/copy of rev; on conflict, fix the files, add, commit.",
+            description: "Local git, no network; writes return the new status. diff/show: stat + patch. commit takes only what add staged. restore discards working changes. uncommit: undo the last commit, its changes stay staged. revert/cherry_pick rev: on conflict, fix, add, commit.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit", "revert", "cherry_pick"]},
                     "paths": {"type": "array", "items": {"type": "string"}},
-                    "rev": {"type": "string", "description": "commit for show (default HEAD), revert, cherry_pick; branch or range (a..b) for log"},
-                    "message": {"type": "string", "description": "commit message"},
-                    "name": {"type": "string", "description": "branch name. branch: creates without switching (no name lists); switch create=true: creates and switches"},
+                    "rev": {"type": "string", "description": "commit (show: default HEAD); log: branch or a..b"},
+                    "message": {"type": "string"},
+                    "name": {"type": "string", "description": "branch: create it (none: list); switch: go to it, create=true for a new one"},
                     "n": {"type": "integer", "description": "log entries, default 10"},
                     "staged": {"type": "boolean", "description": "diff/restore the index"},
                     "all": {"type": "boolean", "description": "add every change (secrets excluded)"},
-                    "stat": {"type": "boolean", "description": "diff: stat only, for large changes"},
-                    "create": {"type": "boolean", "description": "switch: create the branch"},
-                    "pop": {"type": "boolean", "description": "stash: restore the latest stash instead of saving"}
+                    "stat": {"type": "boolean", "description": "diff: stat only"},
+                    "create": {"type": "boolean"},
+                    "pop": {"type": "boolean", "description": "stash: restore the latest"}
                 },
                 "required": ["op"]
             }),
