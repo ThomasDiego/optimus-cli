@@ -1,9 +1,8 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Tool, capped, parse};
+use super::{Ctx, Outcome, Tool, capped, parse};
 use crate::message::ToolDef;
-use crate::ui::Ui;
 
 const CAP: usize = 200;
 
@@ -27,7 +26,7 @@ impl Tool for ListDir {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, _: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let base = ctx.ws.walk_base(a.path.as_deref())?;
         let depth = a.depth.unwrap_or(2).clamp(1, 10);
@@ -43,7 +42,7 @@ impl Tool for ListDir {
                 format!("{}{}{slash}", "  ".repeat(e.depth() - 1), e.file_name().to_string_lossy())
             })
             .collect();
-        Ok(if items.is_empty() { "(empty)".into() } else { capped(items, CAP) })
+        Ok(Outcome::Done(if items.is_empty() { "(empty)".into() } else { capped(items, CAP) }))
     }
 }
 

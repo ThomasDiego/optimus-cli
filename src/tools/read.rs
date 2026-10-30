@@ -3,9 +3,8 @@ use std::fmt::Write as _;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, FileState, Tool, file, parse};
+use super::{Ctx, FileState, Outcome, Tool, file, parse};
 use crate::message::ToolDef;
-use crate::ui::Ui;
 
 const LIMIT: usize = 400;
 const MAX_LIMIT: usize = 2000;
@@ -37,7 +36,7 @@ impl Tool for Read {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, _: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let rel = ctx.ws.rel(&a.path)?;
         let text = file::read_text(ctx, &rel, &a.path)?;
@@ -54,14 +53,14 @@ impl Tool for Read {
         if state.hash != hash {
             *state = FileState { hash, ranges: vec![] };
         } else if state.ranges.contains(&(start, end)) {
-            return Ok("unchanged since last read".into());
+            return Ok(Outcome::Done("unchanged since last read".into()));
         }
         state.ranges.push((start, end));
 
         if total == 0 {
-            return Ok("(empty file)".into());
+            return Ok(Outcome::Done("(empty file)".into()));
         }
-        Ok(render(&lines, start, end, total))
+        Ok(Outcome::Done(render(&lines, start, end, total)))
     }
 }
 

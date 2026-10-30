@@ -4,9 +4,8 @@ use globset::GlobBuilder;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Tool, capped, parse};
+use super::{Ctx, Outcome, Tool, capped, parse};
 use crate::message::ToolDef;
-use crate::ui::Ui;
 
 const CAP: usize = 100;
 
@@ -31,7 +30,7 @@ impl Tool for Glob {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, _: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let base = ctx.ws.walk_base(a.path.as_deref())?;
         let glob = GlobBuilder::new(&a.pattern)
@@ -52,10 +51,10 @@ impl Tool for Glob {
             })
             .collect();
         if hits.is_empty() {
-            return Ok("no match".into());
+            return Ok(Outcome::Done("no match".into()));
         }
         hits.sort_by_key(|h| std::cmp::Reverse(h.0));
-        Ok(capped(hits.into_iter().map(|h| h.1).collect(), CAP))
+        Ok(Outcome::Done(capped(hits.into_iter().map(|h| h.1).collect(), CAP)))
     }
 }
 

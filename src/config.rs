@@ -20,6 +20,15 @@ only = ["deepseek"]
 pub struct Config {
     pub provider: String,
     pub providers: HashMap<String, ProviderConfig>,
+    /// Programs the `run` tool may start, by bare name.
+    #[serde(default = "default_run_allow")]
+    pub run_allow: Vec<String>,
+}
+
+fn default_run_allow() -> Vec<String> {
+    ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make"]
+        .map(String::from)
+        .to_vec()
 }
 
 #[derive(Deserialize)]
