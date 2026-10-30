@@ -53,10 +53,19 @@ impl Tool for Move {
             return Err(format!("{}: exists; delete it first or pick another name", a.to));
         }
         let bytes = file::read_bytes(ctx, &from, &a.from)?;
-        let changes = vec![
-            Change { rel: to, old: None, new: Some(bytes.clone()), kind: Kind::File },
-            Change { rel: from, old: Some(bytes), new: None, kind: Kind::File },
+        let mut changes = vec![
+            Change { rel: to.clone(), old: None, new: Some(bytes.clone()), kind: Kind::File },
+            Change { rel: from.clone(), old: Some(bytes), new: None, kind: Kind::File },
         ];
+        // Like git mv, parents the move leaves empty go too (undoable).
+        let mut dir = from.parent();
+        while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty() && !to.starts_with(d)) {
+            if ctx.ws.dir.read_dir(d).map_or(true, |r| r.count() != 1) {
+                break;
+            }
+            changes.push(Change { rel: d.to_path_buf(), old: Some(vec![]), new: None, kind: Kind::Dir });
+            dir = d.parent();
+        }
         // The model did not author this content: it must read before editing.
         Ok(Outcome::Write(Batch { changes, ok: format!("moved {} → {}", a.from, a.to), known: false }))
     }
@@ -169,9 +178,11 @@ mod tests {
 
     #[test]
     fn moves_deletes_and_undoes_including_binaries() {
-        let mut c = ctx("fsops", &[("src/a.rs", "fn a() {}\n"), ("img.png", "\u{0}\u{1}bin"), ("keep.txt", "k")]);
+        let mut c = ctx("fsops", &[("src/a.rs", "fn a() {}\n"), ("img.png", "\u{0}\u{1}bin"), ("old/x/k.txt", "k")]);
         change::begin_turn(&mut c);
         assert_eq!(call(&mut c, "move_file", json!({"from": "src/a.rs", "to": "src/sub/b.rs"})).unwrap(), "moved src/a.rs → src/sub/b.rs");
+        call(&mut c, "move_file", json!({"from": "old/x/k.txt", "to": "k.txt"})).unwrap();
+        assert!(!c.ws.root.join("old").exists());
         assert_eq!(call(&mut c, "delete_file", json!({"path": "img.png"})).unwrap(), "deleted img.png");
         let root = c.ws.root.clone();
         assert!(!root.join("src/a.rs").exists() && root.join("src/sub/b.rs").exists() && !root.join("img.png").exists());
@@ -182,6 +193,7 @@ mod tests {
         change::begin_turn(&mut c);
         change::undo(&mut c).unwrap();
         assert!(root.join("src/a.rs").exists() && !root.join("src/sub/b.rs").exists());
+        assert!(root.join("old/x/k.txt").exists() && !root.join("k.txt").exists());
         assert_eq!(std::fs::read(root.join("img.png")).unwrap(), b"\x00\x01bin");
     }
 

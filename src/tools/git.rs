@@ -23,8 +23,22 @@ const HARDENING: &[&str] = &[
 ];
 const ENV: &[(&str, &str)] = &[("GIT_TERMINAL_PROMPT", "0"), ("GIT_OPTIONAL_LOCKS", "0")];
 /// `add all` never stages secrets, even when they are not ignored.
-const SECRET_EXCLUDES: &[&str] =
-    &[":(exclude,glob)**/.env", ":(exclude,glob)**/.env.*", ":(exclude,glob)**/*.pem", ":(exclude,glob)**/*.key"];
+const SECRET_EXCLUDES: &[&str] = &[
+    ":(exclude,glob)**/.env",
+    ":(exclude,glob)**/.env.*",
+    ":(exclude,glob)**/*.pem",
+    ":(exclude,glob)**/*.key",
+    ":(exclude,glob)**/*.p12",
+    ":(exclude,glob)**/*.pfx",
+    ":(exclude,glob)**/id_rsa*",
+    ":(exclude,glob)**/id_ed25519*",
+    ":(exclude,glob)**/id_ecdsa*",
+    ":(exclude,glob)**/id_dsa*",
+    ":(exclude,glob)**/.npmrc",
+    ":(exclude,glob)**/.pypirc",
+    ":(exclude,glob)**/.netrc",
+    ":(exclude,glob)**/.git-credentials",
+];
 
 pub struct Git;
 
@@ -43,6 +57,9 @@ enum Op {
     Init,
     Stash,
     Uncommit,
+    Revert,
+    #[serde(rename = "cherry_pick")]
+    CherryPick,
 }
 
 #[derive(Deserialize)]
@@ -70,13 +87,13 @@ impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged.",
+            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged. revert/cherry_pick commit the undo/copy of rev; on conflict, fix the files, add, commit.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit"]},
+                    "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit", "revert", "cherry_pick"]},
                     "paths": {"type": "array", "items": {"type": "string"}},
-                    "rev": {"type": "string", "description": "show: commit, default HEAD"},
+                    "rev": {"type": "string", "description": "commit for show (default HEAD), revert, cherry_pick"},
                     "message": {"type": "string", "description": "commit message"},
                     "name": {"type": "string", "description": "branch name. branch: creates without switching (no name lists); switch create=true: creates and switches"},
                     "n": {"type": "integer", "description": "log entries, default 10"},
@@ -199,6 +216,13 @@ impl Tool for Git {
                 ["reset", "--soft", "HEAD~1"].iter().for_each(|s| push(s));
                 Review::Write
             }
+            // No editor can open: commands have no tty.
+            Op::Revert | Op::CherryPick => {
+                let rev = safe_name(a.rev.as_deref().ok_or("needs rev")?)?;
+                let op = if matches!(a.op, Op::Revert) { "revert" } else { "cherry-pick" };
+                [op, "--no-edit", rev].iter().for_each(|s| push(s));
+                Review::Write
+            }
         };
         let takes_paths = matches!(a.op, Op::Diff | Op::Log | Op::Show | Op::Add | Op::Restore) && !(matches!(a.op, Op::Add) && a.all);
         if takes_paths && !paths.is_empty() {
@@ -289,6 +313,13 @@ mod tests {
         assert!(run(json!({"op": "stash"})).await.starts_with("exit 0"));
         assert!(!root.join("a.rs").exists());
         assert!(run(json!({"op": "stash", "pop": true})).await.starts_with("exit 0"));
+        assert_eq!(std::fs::read_to_string(root.join("a.rs")).unwrap(), "a\n");
+
+        // Commit, revert it, then bring it back with cherry_pick: no editor hangs.
+        assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
+        assert!(run(json!({"op": "revert", "rev": "HEAD"})).await.starts_with("exit 0"));
+        assert!(!root.join("a.rs").exists());
+        assert!(run(json!({"op": "cherry_pick", "rev": "HEAD~1"})).await.starts_with("exit 0"));
         assert_eq!(std::fs::read_to_string(root.join("a.rs")).unwrap(), "a\n");
     }
 

@@ -42,6 +42,14 @@
   (regex #"/\.env$")
   (regex #"/\.env\.[^/]*$"))
 (allow file-read-data (regex #"/\.env\.(example|sample|template)$"))
+; Keys and credential files in the project, as in sandbox::is_secret. Scoped
+; to ROOT: system CA bundles (/private/etc/ssl/cert.pem) must stay readable.
+(deny file-read-data
+  (require-all (subpath (param "ROOT"))
+    (require-any
+      (regex #"\.(pem|key|p12|pfx)$")
+      (regex #"/id_(rsa|ed25519|ecdsa|dsa)[^/]*$")
+      (regex #"/\.(npmrc|pypirc|netrc|git-credentials)$"))))
 
 ; Writes: project and temp. Package caches only when downloading (NET=1),
 ; so offline commands cannot poison caches shared with other projects.
