@@ -38,6 +38,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
     .areas(f.area());
     let tail = (!app.partial.is_empty()).then(|| (app.ai_gutter(), Line::raw(app.partial.clone())));
     app.out.render(history, f.buffer_mut(), tail.as_ref());
+    app.view_area = history;
+    if let Some(sel) = app.selection {
+        sel.highlight(f.buffer_mut(), history);
+        if std::mem::take(&mut app.copy_pending) {
+            app.copied = Some(sel.text(f.buffer_mut(), history));
+        }
+    }
     f.render_widget(live_line(app), live);
     input::render_box(f, app, chat);
     if shown > 0 {
