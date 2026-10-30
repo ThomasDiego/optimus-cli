@@ -1,6 +1,7 @@
 pub mod change;
 mod edit;
 mod file;
+mod fs_ops;
 mod glob;
 mod grep;
 mod list_dir;
@@ -18,7 +19,7 @@ use crate::exec::Exec;
 use crate::message::ToolDef;
 use crate::sandbox::Workspace;
 
-pub use change::Change;
+pub use change::Batch;
 pub use file::truncate;
 
 /// What the model has seen of a file: guards edits and dedups re-reads.
@@ -45,7 +46,7 @@ impl Ctx {
 /// agent, which applies its permission mode first.
 pub enum Outcome {
     Done(String),
-    Write(Change),
+    Write(Batch),
     Exec(Exec),
 }
 
@@ -61,6 +62,8 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(read::Read),
         Box::new(edit::Edit),
         Box::new(write::Write),
+        Box::new(fs_ops::Move),
+        Box::new(fs_ops::Delete),
         Box::new(glob::Glob),
         Box::new(grep::Grep),
         Box::new(list_dir::ListDir),
@@ -102,7 +105,7 @@ pub mod tests {
         let t = all().into_iter().find(|t| t.def().name == tool).unwrap();
         match t.run(ctx, &args.to_string())? {
             Outcome::Done(s) => Ok(s),
-            Outcome::Write(ch) => change::apply(ctx, ch),
+            Outcome::Write(batch) => change::apply(ctx, batch),
             Outcome::Exec(ex) => Ok(format!("exec {} {:?}", ex.program, ex.args)),
         }
     }

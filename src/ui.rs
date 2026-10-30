@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde_json::Value;
 use tokio::sync::oneshot;
 
@@ -13,13 +11,14 @@ pub enum Event {
     Usage(Usage),
     ToolCall(ToolCall),
     ToolResult { ok: bool, output: String },
-    /// A file was written without confirmation; shown to the user only.
-    Diff { path: PathBuf, diff: String },
+    /// Files were written without confirmation; shown to the user only.
+    Diff { label: String, diff: String },
     Approve { req: Approval, reply: oneshot::Sender<bool> },
 }
 
 pub enum Approval {
-    Write { path: PathBuf, diff: String },
+    /// `label` names the files: `src/a.rs` or `a.rs → b.rs`.
+    Write { label: String, diff: String },
     Exec { cmd: String, net: bool },
 }
 
@@ -36,7 +35,11 @@ pub fn brief(call: &ToolCall) -> String {
             Some(path) => format!("{p} in {path}"),
             None => p,
         }),
-        _ => s("path"),
+        "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        _ => s("path").or_else(|| {
+            let paths = args["paths"].as_array()?.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            Some(paths.join(", "))
+        }),
     };
     match detail {
         Some(d) => format!("{} {}", call.name, truncate(&d, 100)),

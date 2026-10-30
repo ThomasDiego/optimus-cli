@@ -16,6 +16,7 @@ const SYSTEM: &str = "You are ai, a coding agent in the user's project directory
 There is no shell: use the tools; run starts allowed programs directly. \
 Paths are relative to the project root; nothing outside it is reachable. \
 Read a file before editing it. Prefer edit_file and batch edits in one call. \
+Call independent tools together in one reply; read_file takes paths to read several files at once. \
 Verify changes by building or testing when possible. Be concise.";
 
 /// Hard stop against runaway tool loops.
@@ -80,16 +81,16 @@ impl<P: Provider> Agent<P> {
         let i = self.defs.iter().position(|d| d.name == call.name).ok_or_else(|| format!("unknown tool {}", call.name))?;
         match self.tools[i].run(ctx, &call.args)? {
             Outcome::Done(out) => Ok(out),
-            Outcome::Write(ch) => {
-                let (path, diff) = (ch.rel.clone(), ch.diff());
+            Outcome::Write(batch) => {
+                let (label, diff) = (batch.label(), batch.diff());
                 if self.mode.get().needs_approval(Kind::Write) {
-                    if !self.approve(Approval::Write { path, diff }).await {
+                    if !self.approve(Approval::Write { label, diff }).await {
                         return Err(DENIED.into());
                     }
                 } else {
-                    self.emit(Event::Diff { path, diff });
+                    self.emit(Event::Diff { label, diff });
                 }
-                change::apply(ctx, ch)
+                change::apply(ctx, batch)
             }
             Outcome::Exec(ex) => {
                 let kind = if ex.net { Kind::ExecNet } else { Kind::Exec };

@@ -49,11 +49,11 @@ fn show(ev: Event) {
             let first = truncate(output.lines().next().unwrap_or(""), 120).replace('\t', "  ");
             eprintln!("  {}{first}", if ok { "" } else { "✗ " });
         }
-        Event::Diff { path, .. } => eprintln!("  modifié : {}", path.display()),
+        Event::Diff { label, .. } => eprintln!("  modifié : {label}"),
         Event::Approve { req, reply } => {
             let _ = reply.send(false);
             let (what, hint) = match req {
-                Approval::Write { path, .. } => (format!("écriture de {}", path.display()), "--mode edit ou auto"),
+                Approval::Write { label, .. } => (format!("écriture de {label}"), "--mode edit ou auto"),
                 Approval::Exec { cmd, net: false } => (format!("exécution de {cmd}"), "--mode auto"),
                 Approval::Exec { cmd, net: true } => (format!("exécution de {cmd}"), "réseau : confirmation interactive obligatoire"),
             };
