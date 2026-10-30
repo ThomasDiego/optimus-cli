@@ -136,7 +136,8 @@ impl<P: Provider> Agent<P> {
                 let mut out = exec::run(&ex, &ctx.ws.root).await?;
                 // After a git write, the new state comes with it: no checking step.
                 if ex.git {
-                    out = format!("{out}\n[git status]\n{}", tools::git_status(&ctx.ws.root).await);
+                    let after = tools::git_after_write(&ctx.ws.root, &ex.args, out.starts_with("exit 0")).await;
+                    out = format!("{out}\n{after}");
                 }
                 let Some(before) = before else { return Ok(out) };
                 let after = track::snapshot(&ctx.ws).unwrap_or_default();
@@ -154,8 +155,14 @@ impl<P: Provider> Agent<P> {
                 Err(e) => {
                     // A request that crashes the server only shows up as a reset.
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    let gone = !ctx.jobs.ports().contains(&port);
-                    Err(if gone { format!("{e}; the server exited (crashed?), process output shows why") } else { e })
+                    if ctx.jobs.ports().contains(&port) {
+                        return Err(e);
+                    }
+                    // Its crash output comes along: no process call to see why.
+                    Err(match ctx.jobs.output_on(port) {
+                        Some(out) => format!("{e}; the server exited:\n{out}"),
+                        None => format!("{e}; the server exited (crashed?)"),
+                    })
                 }
                 ok => ok,
             },

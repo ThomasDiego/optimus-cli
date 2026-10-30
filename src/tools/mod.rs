@@ -31,7 +31,7 @@ use crate::web::Fetch;
 
 pub use change::Batch;
 pub use file::stale;
-pub use git::status as git_status;
+pub use git::{after_write as git_after_write, status as git_status};
 pub use list_dir::tree;
 pub use file::truncate;
 

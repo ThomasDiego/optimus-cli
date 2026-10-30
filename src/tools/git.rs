@@ -244,11 +244,26 @@ impl Tool for Git {
 /// shows it up front and after every git write, so the model never spends a
 /// step asking where it stands.
 pub async fn status(root: &Path) -> String {
-    let args = ["status", "--short", "--branch"].map(String::from).to_vec();
+    super::capped(read_only(root, &["status", "--short", "--branch"]).await.lines().map(String::from).collect(), 15)
+}
+
+/// Appended to a git write's result so the model has nothing to check: the
+/// new status, plus the patch of the commit a revert or cherry_pick made.
+pub async fn after_write(root: &Path, args: &[String], ok: bool) -> String {
+    let mut out = format!("[git status]\n{}", status(root).await);
+    if ok && matches!(args.first().map(String::as_str), Some("revert" | "cherry-pick")) {
+        let patch = read_only(root, &["show", "--no-ext-diff", "--no-textconv", "--format=", "--patch-with-stat", "HEAD"]).await;
+        out.push_str(&format!("\n[new commit]\n{}", crate::exec::clip(&patch)));
+    }
+    out
+}
+
+/// Stdout of a hardened, read-only git command.
+async fn read_only(root: &Path, args: &[&str]) -> String {
+    let args = args.iter().map(|s| s.to_string()).collect();
     let ex = Exec { review: Review::None, env: ENV, hidden_args: HARDENING, ..Exec::new("git".into(), args, root.to_path_buf(), TIMEOUT) };
     let out = crate::exec::run(&ex, root).await.unwrap_or_default();
-    let text = out.split_once("[stdout]\n").map_or("", |(_, s)| s.split("\n[stderr]").next().unwrap_or(""));
-    super::capped(text.lines().map(String::from).collect(), 15)
+    out.split_once("[stdout]\n").map_or("", |(_, s)| s.split("\n[stderr]").next().unwrap_or("")).trim().to_string()
 }
 
 /// Branch or revision: no option injection, no odd characters.
@@ -343,6 +358,11 @@ mod tests {
         assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
         assert!(run(json!({"op": "revert", "rev": "HEAD"})).await.starts_with("exit 0"));
         assert!(!root.join("a.rs").exists());
+        // The model sees what the revert did without reading the files.
+        let revert = vec!["revert".to_string()];
+        let after = super::after_write(&root, &revert, true).await;
+        assert!(after.starts_with("[git status]\n## ") && after.contains("[new commit]") && after.contains("-a"), "{after}");
+        assert!(!super::after_write(&root, &revert, false).await.contains("[new commit]"));
         assert!(run(json!({"op": "cherry_pick", "rev": "HEAD~1"})).await.starts_with("exit 0"));
         assert_eq!(std::fs::read_to_string(root.join("a.rs")).unwrap(), "a\n");
     }
