@@ -1,6 +1,9 @@
 mod agent;
+mod command;
 mod config;
+mod exec;
 mod message;
+mod permission;
 mod provider;
 mod repl;
 mod sandbox;
@@ -8,8 +11,10 @@ mod tools;
 mod ui;
 
 use anyhow::{Context, Result, bail};
+use tokio::sync::mpsc;
 
 use crate::agent::Agent;
+use crate::permission::Mode;
 use crate::provider::OpenAiCompat;
 use crate::sandbox::Workspace;
 use crate::tools::Ctx;
@@ -26,7 +31,8 @@ async fn main() -> Result<()> {
 
     let ws = Workspace::open(std::env::current_dir()?)?;
     let header = format!("{} · {}", p.model, ws.root.display());
-    let mut ctx = Ctx::new(ws);
-    let mut agent = Agent::new(provider, tools::all());
-    repl::run(&mut agent, &mut ctx, &header).await
+    let mut ctx = Ctx::new(ws, cfg.run_allow.clone());
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let mut agent = Agent::new(provider, tools::all(), tx, Mode::Ask);
+    repl::run(&mut agent, &mut ctx, &mut events, &header).await
 }

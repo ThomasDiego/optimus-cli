@@ -4,10 +4,8 @@ use std::io;
 use std::path::Path;
 
 use cap_std::fs::Dir;
-use similar::TextDiff;
 
-use super::{Ctx, FileState};
-use crate::ui::Ui;
+use super::Ctx;
 
 const MAX_BYTES: u64 = 5_000_000;
 
@@ -57,19 +55,7 @@ pub fn ensure_fresh(ctx: &Ctx, rel: &Path, current: &str, shown: &str) -> Result
     }
 }
 
-/// Shows the diff to the user only (no tokens), then writes atomically.
-pub fn commit(ctx: &mut Ctx, ui: &mut dyn Ui, rel: &Path, old: Option<&str>, new: &str, shown: &str) -> Result<(), String> {
-    let diff = TextDiff::from_lines(old.unwrap_or(""), new).unified_diff().context_radius(2).to_string();
-    if !ui.approve(rel, &diff) {
-        return Err("rejected by user".into());
-    }
-    write_atomic(&ctx.ws.dir, rel, new).map_err(|e| io_err(shown, e))?;
-    // The model knows what it wrote: no re-read needed before the next edit.
-    ctx.reads.insert(rel.to_path_buf(), FileState { hash: hash(new), ranges: vec![] });
-    Ok(())
-}
-
-fn write_atomic(dir: &Dir, rel: &Path, data: &str) -> io::Result<()> {
+pub fn write_atomic(dir: &Dir, rel: &Path, data: &str) -> io::Result<()> {
     let name = rel.file_name().ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
     let parent = rel.parent().unwrap_or(Path::new(""));
     if !parent.as_os_str().is_empty() {

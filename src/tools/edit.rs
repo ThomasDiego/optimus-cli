@@ -2,9 +2,9 @@ use serde::Deserialize;
 use serde_json::json;
 use similar::{DiffTag, TextDiff};
 
-use super::{Ctx, Tool, file, matching, parse};
+use super::change::Change as Pending;
+use super::{Ctx, Outcome, Tool, file, matching, parse};
 use crate::message::ToolDef;
-use crate::ui::Ui;
 
 pub struct Edit;
 
@@ -49,7 +49,7 @@ impl Tool for Edit {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, ui: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         if a.edits.is_empty() {
             return Err("edits is empty".into());
@@ -61,8 +61,8 @@ impl Tool for Edit {
         if updated == current {
             return Err("no change".into());
         }
-        file::commit(ctx, ui, &rel, Some(&current), &updated, &a.path)?;
-        Ok(summary(&current, &updated))
+        let ok = summary(&current, &updated);
+        Ok(Outcome::Write(Pending { rel, old: Some(current), new: updated, ok }))
     }
 }
 

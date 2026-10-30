@@ -1,3 +1,4 @@
+pub mod change;
 mod edit;
 mod file;
 mod glob;
@@ -5,6 +6,7 @@ mod grep;
 mod list_dir;
 mod matching;
 mod read;
+mod run;
 mod write;
 
 use std::collections::HashMap;
@@ -12,10 +14,11 @@ use std::path::PathBuf;
 
 use serde::de::DeserializeOwned;
 
+use crate::exec::Exec;
 use crate::message::ToolDef;
 use crate::sandbox::Workspace;
-use crate::ui::Ui;
 
+pub use change::Change;
 pub use file::truncate;
 
 /// What the model has seen of a file: guards edits and dedups re-reads.
@@ -27,18 +30,29 @@ pub struct FileState {
 pub struct Ctx {
     pub ws: Workspace,
     pub reads: HashMap<PathBuf, FileState>,
+    pub undo: Vec<Vec<change::Snapshot>>,
+    /// Programs the `run` tool may start.
+    pub run_allow: Vec<String>,
 }
 
 impl Ctx {
-    pub fn new(ws: Workspace) -> Self {
-        Self { ws, reads: HashMap::new() }
+    pub fn new(ws: Workspace, run_allow: Vec<String>) -> Self {
+        Self { ws, reads: HashMap::new(), undo: vec![], run_allow }
     }
+}
+
+/// Tools never write or execute themselves: side effects are returned to the
+/// agent, which applies its permission mode first.
+pub enum Outcome {
+    Done(String),
+    Write(Change),
+    Exec(Exec),
 }
 
 pub trait Tool {
     fn def(&self) -> ToolDef;
     /// Errors are returned to the model as short actionable messages.
-    fn run(&self, ctx: &mut Ctx, ui: &mut dyn Ui, args: &str) -> Result<String, String>;
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String>;
 }
 
 /// Stable order: keeps the cached prompt prefix identical across turns.
@@ -50,6 +64,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(glob::Glob),
         Box::new(grep::Grep),
         Box::new(list_dir::ListDir),
+        Box::new(run::Run),
     ]
 }
 
@@ -70,22 +85,7 @@ fn capped(items: Vec<String>, cap: usize) -> String {
 
 #[cfg(test)]
 pub mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::message::ToolCall;
-
-    /// Approves every write.
-    pub struct Yes;
-
-    impl Ui for Yes {
-        fn text(&mut self, _: &str) {}
-        fn tool_call(&mut self, _: &ToolCall) {}
-        fn tool_result(&mut self, _: bool, _: &str) {}
-        fn approve(&mut self, _: &Path, _: &str) -> bool {
-            true
-        }
-    }
 
     pub fn ctx(name: &str, files: &[(&str, &str)]) -> Ctx {
         let root = crate::sandbox::tests::temp(name);
@@ -94,11 +94,16 @@ pub mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, content).unwrap();
         }
-        Ctx::new(Workspace::open(root).unwrap())
+        Ctx::new(Workspace::open(root).unwrap(), vec!["cargo".into()])
     }
 
+    /// Runs a tool and applies its write as if approved.
     pub fn call(ctx: &mut Ctx, tool: &str, args: serde_json::Value) -> Result<String, String> {
         let t = all().into_iter().find(|t| t.def().name == tool).unwrap();
-        t.run(ctx, &mut Yes, &args.to_string())
+        match t.run(ctx, &args.to_string())? {
+            Outcome::Done(s) => Ok(s),
+            Outcome::Write(ch) => change::apply(ctx, ch),
+            Outcome::Exec(ex) => Ok(format!("exec {} {:?}", ex.program, ex.args)),
+        }
     }
 }

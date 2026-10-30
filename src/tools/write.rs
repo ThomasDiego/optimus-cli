@@ -1,9 +1,8 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Tool, file, parse};
+use super::{Change, Ctx, Outcome, Tool, file, parse};
 use crate::message::ToolDef;
-use crate::ui::Ui;
 
 pub struct Write;
 
@@ -26,7 +25,7 @@ impl Tool for Write {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, ui: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let rel = ctx.ws.rel_write(&a.path)?;
         let exists = ctx.ws.dir.try_exists(&rel).map_err(|e| file::io_err(&a.path, e))?;
@@ -37,8 +36,8 @@ impl Tool for Write {
         } else {
             None
         };
-        file::commit(ctx, ui, &rel, old.as_deref(), &a.content, &a.path)?;
-        Ok(format!("ok {}L", a.content.lines().count()))
+        let ok = format!("ok {}L", a.content.lines().count());
+        Ok(Outcome::Write(Change { rel, old, new: a.content, ok }))
     }
 }
 

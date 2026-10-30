@@ -5,10 +5,9 @@ use grep_searcher::{BinaryDetection, SearcherBuilder};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Tool, file, parse};
+use super::{Ctx, Outcome, Tool, file, parse};
 use crate::message::ToolDef;
 use crate::sandbox::is_secret;
-use crate::ui::Ui;
 
 const CAP: usize = 100;
 const MAX_LINE: usize = 200;
@@ -54,7 +53,7 @@ impl Tool for Grep {
         }
     }
 
-    fn run(&self, ctx: &mut Ctx, _: &mut dyn Ui, args: &str) -> Result<String, String> {
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let base = ctx.ws.walk_base(a.path.as_deref())?;
         let matcher = RegexMatcherBuilder::new()
@@ -109,7 +108,7 @@ impl Tool for Grep {
                 break;
             }
         }
-        Ok(if out.is_empty() { "no match".into() } else { out.join("\n") })
+        Ok(Outcome::Done(if out.is_empty() { "no match".into() } else { out.join("\n") }))
     }
 }
 
