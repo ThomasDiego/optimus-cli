@@ -7,7 +7,7 @@ use crate::agent::Agent;
 use crate::message::{kilo, money};
 use crate::provider::Provider;
 use crate::tools::{Ctx, truncate};
-use crate::ui::{Approval, Event, brief, stat};
+use crate::ui::{Approval, Event, brief, stat, summary};
 
 /// One turn without UI: the answer goes to stdout (pipeable), progress to
 /// stderr. Nobody can approve, so anything the mode would ask for is denied.
@@ -62,8 +62,9 @@ fn show(ev: Event, flow: &mut Flow) {
             eprintln!("› {}", brief(&call));
         }
         Event::ToolResult { ok, output } => {
-            let first = truncate(output.lines().next().unwrap_or(""), 120).replace('\t', "  ");
-            eprintln!("  {}{first}", if ok { "" } else { "✗ " });
+            // ✗ marks tool errors only (the eval counts them); exit codes stay plain.
+            let (first, _) = summary(ok, &output);
+            eprintln!("  {}{}", if ok { "" } else { "✗ " }, truncate(&first, 120));
         }
         Event::Diff { diff, .. } => {
             let (add, del) = stat(&diff);

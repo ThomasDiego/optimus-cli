@@ -22,7 +22,7 @@ impl Tool for Glob {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "glob",
-            description: "Find files by glob (e.g. **/*.rs), newest first. Respects .gitignore.",
+            description: "Find files by glob (e.g. **/*.rs), newest first. Skips .gitignored paths unless the pattern starts in one (node_modules/x/*).",
             schema: json!({
                 "type": "object",
                 "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
@@ -34,7 +34,15 @@ impl Tool for Glob {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         let base = ctx.ws.walk_base(a.path.as_deref())?;
-        let glob = GlobBuilder::new(&a.pattern)
+        // A literal leading dir ("node_modules/three/*.json") becomes the walk
+        // base: an ignored dir is then searched when explicitly targeted.
+        let parts: Vec<&str> = a.pattern.split('/').collect();
+        let literal = parts[..parts.len() - 1].iter().take_while(|p| !p.contains(['*', '?', '[', '{'])).count();
+        let (base, pattern) = match ctx.ws.walk_base(Some(&base.join(parts[..literal].join("/")).to_string_lossy())) {
+            Ok(dir) if literal > 0 && dir.is_dir() => (dir, parts[literal..].join("/")),
+            _ => (base, a.pattern.clone()),
+        };
+        let glob = GlobBuilder::new(&pattern)
             .literal_separator(true)
             .build()
             .map_err(|e| format!("invalid pattern: {e}"))?
@@ -73,6 +81,18 @@ mod tests {
         assert_eq!(call(&mut c, "glob", json!({"pattern": "*.zz"})).unwrap(), "no match");
         std::fs::write(c.ws.root.join(".env"), "S=1").unwrap();
         assert_eq!(call(&mut c, "glob", json!({"pattern": ".env*"})).unwrap(), ".env (secret)");
+
+        // Ignored dirs stay out of broad searches but can be targeted.
+        std::fs::write(c.ws.root.join(".gitignore"), "target/\nnode_modules/\n").unwrap();
+        std::fs::create_dir_all(c.ws.root.join("node_modules/three")).unwrap();
+        std::fs::write(c.ws.root.join("node_modules/three/package.json"), "{}").unwrap();
+        assert_eq!(call(&mut c, "glob", json!({"pattern": "**/package.json"})).unwrap(), "no match");
+        let hit = "node_modules/three/package.json";
+        assert_eq!(call(&mut c, "glob", json!({"pattern": hit})).unwrap(), hit);
+        assert_eq!(call(&mut c, "glob", json!({"pattern": "node_modules/*/package.json"})).unwrap(), hit);
+        assert_eq!(call(&mut c, "list_dir", json!({"path": "node_modules"})).unwrap(), "three/\n  package.json");
+        // A prefix escaping the project is not a base: plain match, nothing found.
+        assert_eq!(call(&mut c, "glob", json!({"pattern": "../*/x"})).unwrap(), "no match");
         assert!(call(&mut c, "glob", json!({"pattern": "*", "path": ".."})).is_err());
     }
 }

@@ -87,6 +87,10 @@ impl Tool for Git {
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
+        // A parent repository is out of the sandbox's reach anyway.
+        if !ctx.ws.dir.is_dir(".git") {
+            return Err("not a git repository".into());
+        }
         // Pathspecs go to git as text, so `..` is refused here rather than at I/O.
         let paths = a
             .paths
@@ -205,6 +209,8 @@ mod tests {
     #[test]
     fn builds_fixed_commands_and_rejects_injection() {
         let mut c = ctx("git", &[("a.rs", "")]);
+        assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap_err(), "not a git repository");
+        std::fs::create_dir(c.ws.root.join(".git")).unwrap();
         assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap(), ("status --short --branch".into(), false));
         assert_eq!(plan(&mut c, json!({"op": "diff"})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat");
         assert_eq!(plan(&mut c, json!({"op": "diff", "stat": true})).unwrap().0, "diff --no-ext-diff --no-textconv --stat");
