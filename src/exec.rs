@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 use crate::tools::truncate;
 
@@ -32,16 +32,19 @@ pub struct Exec {
     /// Forced variables and leading arguments, not shown in approvals.
     pub env: &'static [(&'static str, &'static str)],
     pub hidden_args: &'static [&'static str],
+    /// Keeps running after the call returns (servers, watchers); no timeout.
+    pub background: bool,
 }
 
 impl Exec {
     pub fn new(program: String, args: Vec<String>, dir: PathBuf, timeout: Duration) -> Self {
-        Self { program, args, dir, timeout, net: false, review: Review::Exec, git: false, env: &[], hidden_args: &[] }
+        Self { program, args, dir, timeout, net: false, review: Review::Exec, git: false, env: &[], hidden_args: &[], background: false }
     }
 
     pub fn display(&self) -> String {
         let quote = |a: &String| if a.contains(char::is_whitespace) { format!("{a:?}") } else { a.clone() };
         let cmd = std::iter::once(&self.program).chain(&self.args).map(quote).collect::<Vec<_>>().join(" ");
+        let cmd = if self.background { format!("{cmd} [en fond]") } else { cmd };
         if self.net { format!("{cmd} [réseau]") } else { cmd }
     }
 }
@@ -59,7 +62,7 @@ const MAX_FILE: libc::rlim_t = 2 << 30;
 const PROFILE: &str = include_str!("seatbelt.sb");
 
 /// Kills the whole process group, so nothing a command spawned survives it.
-struct Group(libc::pid_t);
+pub struct Group(libc::pid_t);
 
 impl Drop for Group {
     fn drop(&mut self) {
@@ -70,6 +73,19 @@ impl Drop for Group {
 
 /// Runs without a shell, with a cleared environment, resource limits and a timeout.
 pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
+    let start = Instant::now();
+    let (child, _group) = spawn(ex, root)?;
+    // On timeout, cancel or exit, `_group` kills every remaining process.
+    let out = match tokio::time::timeout(ex.timeout, child.wait_with_output()).await {
+        Ok(r) => r.map_err(|e| format!("{}: {e}", ex.program))?,
+        Err(_) => return Err(format!("timeout after {}s, process killed", ex.timeout.as_secs())),
+    };
+    Ok(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr))
+}
+
+/// Starts the sandboxed command in its own process group, output piped.
+/// Dropping the `Group` kills it and everything it spawned.
+pub fn spawn(ex: &Exec, root: &Path) -> Result<(Child, Group), String> {
     let mut cmd = command(ex, root);
     cmd.current_dir(&ex.dir)
         .env_clear()
@@ -93,15 +109,9 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
             Ok(())
         });
     }
-    let start = Instant::now();
     let child = cmd.spawn().map_err(|e| format!("{}: {e}", ex.program))?;
-    let _group = child.id().map(|pid| Group(pid as libc::pid_t));
-    // On timeout, cancel or exit, `_group` kills every remaining process.
-    let out = match tokio::time::timeout(ex.timeout, child.wait_with_output()).await {
-        Ok(r) => r.map_err(|e| format!("{}: {e}", ex.program))?,
-        Err(_) => return Err(format!("timeout after {}s, process killed", ex.timeout.as_secs())),
-    };
-    Ok(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr))
+    let pid = child.id().ok_or_else(|| format!("{}: exited at once", ex.program))?;
+    Ok((child, Group(pid as libc::pid_t)))
 }
 
 #[cfg(target_os = "macos")]
@@ -143,7 +153,7 @@ fn format_output(code: Option<i32>, took: Duration, stdout: &[u8], stderr: &[u8]
 }
 
 /// Keeps the head (first errors) and the tail (summary), drops the middle.
-fn clip(text: &str) -> String {
+pub fn clip(text: &str) -> String {
     let lines: Vec<String> = text.trim_end().lines().map(|l| truncate(l, 300).into_owned()).collect();
     if lines.len() <= HEAD + TAIL {
         return lines.join("\n");

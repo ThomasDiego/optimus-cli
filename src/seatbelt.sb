@@ -9,6 +9,9 @@
 (deny network-outbound (remote unix-socket))
 (if (equal? (param "NET") "1")
   (allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder")))
+; Dev servers may listen, but only this machine can connect, never the LAN.
+(deny network-inbound)
+(allow network-inbound (local ip "localhost:*"))
 
 ; Reads: deny by default; stat() stays allowed so path lookups work.
 (deny file-read-data)

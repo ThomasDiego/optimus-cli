@@ -101,12 +101,15 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         vec![],
     ];
     let mode_label = format!(" {}", mode.name());
+    let jobs = if app.jobs > 0 { format!(" · {} en fond", app.jobs) } else { String::new() };
+    let used = mode_label.chars().count() + jobs.chars().count();
     let rest = candidates
         .iter()
         .map(|c| c.iter().map(|s| format!(" · {s}")).collect::<String>())
-        .find(|r| mode_label.chars().count() + r.chars().count() <= width)
+        .find(|r| used + r.chars().count() <= width)
         .unwrap_or_default();
-    Line::from(vec![Span::styled(mode_label, mode_style), Span::styled(rest, dim())])
+    let jobs = Span::styled(jobs, Style::new().fg(Color::Cyan));
+    Line::from(vec![Span::styled(mode_label, mode_style), jobs, Span::styled(rest, dim())])
 }
 
 #[cfg(test)]

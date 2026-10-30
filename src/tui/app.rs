@@ -51,6 +51,8 @@ pub struct App {
     pub context: u64,
     pub mode: Rc<Cell<Mode>>,
     pub model: String,
+    /// Background jobs still running, refreshed between turns.
+    pub jobs: usize,
 }
 
 fn dim() -> Style {
@@ -84,6 +86,7 @@ impl App {
             context: 0,
             mode,
             model,
+            jobs: 0,
         }
     }
 

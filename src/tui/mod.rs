@@ -73,6 +73,7 @@ async fn session<P: Provider>(
     let mut app = App::new(model, agent.mode.clone());
     let mut keys = term_events();
     loop {
+        app.jobs = ctx.jobs.running();
         draw(term, &mut app)?;
         let Some(ev) = keys.recv().await else { return Ok(()) };
         let input = match app.on_term(ev) {
