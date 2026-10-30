@@ -114,7 +114,9 @@ mod tests {
         assert_eq!(call(&mut c, "read_file", json!({"path": "./a.txt"})).unwrap(), "unchanged since last read");
         let tail = call(&mut c, "read_file", json!({"path": "a.txt", "offset": 499})).unwrap();
         assert_eq!(tail, "499\tl499\n500\tl500\n[499-500/500]");
-        assert!(call(&mut c, "read_file", json!({"path": "bin"})).unwrap_err().contains("binary"));
+        assert_eq!(call(&mut c, "read_file", json!({"path": "bin"})).unwrap_err(), "bin: binary, unknown format (3 bytes)");
+        std::fs::write(c.ws.root.join("logo.png"), b"\x89PNG\r\n\x1a\n\0\0").unwrap();
+        assert_eq!(call(&mut c, "read_file", json!({"path": "logo.png"})).unwrap_err(), "logo.png: binary, PNG image (10 bytes)");
         assert!(call(&mut c, "read_file", json!({"path": "."})).unwrap_err().contains("list_dir"));
     }
 
