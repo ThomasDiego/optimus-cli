@@ -1,10 +1,12 @@
+use std::path::Path;
+
 use grep_regex::RegexMatcher;
 use grep_searcher::SearcherBuilder;
 use grep_searcher::sinks::UTF8;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Outcome, Tool, file, parse};
+use super::{Ctx, Outcome, Tool, capped, file, parse};
 use crate::message::ToolDef;
 
 /// Declarations of a file with their line numbers: the shape of a module for
@@ -69,10 +71,20 @@ impl Tool for Outline {
 fn one(ctx: &Ctx, path: &str) -> Result<String, String> {
     let rel = ctx.ws.rel(path)?;
     let ext = rel.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let (_, pattern) = LANGS.iter().find(|(exts, _)| exts.contains(&ext)).ok_or_else(|| format!("{path}: no outline for .{ext} files; use grep"))?;
-    let matcher = RegexMatcher::new_line_matcher(pattern).map_err(|e| e.to_string())?;
+    if !LANGS.iter().any(|(exts, _)| exts.contains(&ext)) {
+        return Err(format!("{path}: no outline for .{ext} files; use grep"));
+    }
     // Read through the capability handle like read_file, then search in memory.
     let text = file::read_text(ctx, &rel, path)?;
+    let out = decls(&rel, &text).unwrap_or_default();
+    Ok(if out.is_empty() { "(no declarations)".into() } else { capped(out, CAP) })
+}
+
+/// `line:declaration` entries, or None for an unsupported language.
+pub(super) fn decls(rel: &Path, text: &str) -> Option<Vec<String>> {
+    let ext = rel.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let (_, pattern) = LANGS.iter().find(|(exts, _)| exts.contains(&ext))?;
+    let matcher = RegexMatcher::new_line_matcher(pattern).ok()?;
     let mut out = vec![];
     SearcherBuilder::new()
         .line_number(true)
@@ -80,10 +92,10 @@ fn one(ctx: &Ctx, path: &str) -> Result<String, String> {
         .search_slice(&matcher, text.as_bytes(), UTF8(|ln, line| {
             let decl = line.trim_end().trim_end_matches('{').trim_end();
             out.push(format!("{ln}:{}", file::truncate(decl, MAX_LINE)));
-            Ok(out.len() < CAP)
+            Ok(true)
         }))
-        .map_err(|e| file::io_err(path, e))?;
-    Ok(if out.is_empty() { "(no declarations)".into() } else { out.join("\n") })
+        .ok()?;
+    Some(out)
 }
 
 #[cfg(test)]
