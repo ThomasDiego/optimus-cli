@@ -87,7 +87,7 @@ impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged. revert/cherry_pick commit the undo/copy of rev; on conflict, fix the files, add, commit.",
+            description: "Local git, no network. diff and show give stat + patch (show a commit, so no extra step to see what it changed). commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged. revert/cherry_pick commit the undo/copy of rev; on conflict, fix the files, add, commit.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -150,7 +150,9 @@ impl Tool for Git {
                 let rev = safe_name(a.rev.as_deref().unwrap_or("HEAD"))?;
                 ["show", "--no-ext-diff", "--no-textconv"].iter().for_each(|s| push(s));
                 if paths.is_empty() {
-                    push("--stat");
+                    // Stat then patch: without it `--stat` alone hides the diff,
+                    // and the model would retry through a shell to see it.
+                    push("--patch-with-stat");
                 }
                 push(rev);
                 Review::None
@@ -273,6 +275,7 @@ mod tests {
         assert_eq!(plan(&mut c, json!({"op": "diff", "paths": ["a.rs"]})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat -- a.rs");
         assert_eq!(plan(&mut c, json!({"op": "commit", "message": "--amend"})).unwrap(), ("commit -m --amend".into(), true));
         assert!(plan(&mut c, json!({"op": "add", "all": true})).unwrap().0.contains(":(exclude,glob)**/.env"));
+        assert_eq!(plan(&mut c, json!({"op": "show", "rev": "HEAD"})).unwrap().0, "show --no-ext-diff --no-textconv --patch-with-stat HEAD");
         assert!(plan(&mut c, json!({"op": "show", "rev": "--output=/tmp/x"})).is_err());
         assert!(plan(&mut c, json!({"op": "switch", "name": "a;rm"})).is_err());
         assert!(plan(&mut c, json!({"op": "add", "paths": [".env"]})).is_err());
