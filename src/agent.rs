@@ -58,9 +58,11 @@ impl<P: Provider> Agent<P> {
         if self.messages.is_empty() {
             // Capped lower than list_dir: it is paid on every request of the session.
             notes.push(format!("[Project files, depth 2]\n{}", tools::tree(ctx, &ctx.ws.root, 2, 80)));
-            if !ctx.ws.dir.is_dir(".git") {
-                notes.push("[Not a git repository]".into());
-            }
+            // Saves the git status every git task opens with.
+            notes.push(match ctx.ws.dir.is_dir(".git") {
+                true => format!("[Git status]\n{}", tools::git_status(&ctx.ws.root).await),
+                false => "[Not a git repository]".into(),
+            });
         }
         let stale = tools::stale(ctx);
         if !stale.is_empty() {
@@ -131,7 +133,11 @@ impl<P: Provider> Agent<P> {
                     return ctx.jobs.start(&ex, &ctx.ws.root).await;
                 }
                 let before = track::snapshot(&ctx.ws);
-                let out = exec::run(&ex, &ctx.ws.root).await?;
+                let mut out = exec::run(&ex, &ctx.ws.root).await?;
+                // After a git write, the new state comes with it: no checking step.
+                if ex.git {
+                    out = format!("{out}\n[git status]\n{}", tools::git_status(&ctx.ws.root).await);
+                }
                 let Some(before) = before else { return Ok(out) };
                 let after = track::snapshot(&ctx.ws).unwrap_or_default();
                 Ok(track::annotate(out, &track::changes(&before, &after)))

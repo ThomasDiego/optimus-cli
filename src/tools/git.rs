@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -93,7 +94,7 @@ impl Tool for Git {
                 "properties": {
                     "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit", "revert", "cherry_pick"]},
                     "paths": {"type": "array", "items": {"type": "string"}},
-                    "rev": {"type": "string", "description": "commit for show (default HEAD), revert, cherry_pick"},
+                    "rev": {"type": "string", "description": "commit for show (default HEAD), revert, cherry_pick; branch or range (a..b) for log"},
                     "message": {"type": "string", "description": "commit message"},
                     "name": {"type": "string", "description": "branch name. branch: creates without switching (no name lists); switch create=true: creates and switches"},
                     "n": {"type": "integer", "description": "log entries, default 10"},
@@ -144,6 +145,9 @@ impl Tool for Git {
             Op::Log => {
                 let n = a.n.unwrap_or(10).clamp(1, MAX_LOG).to_string();
                 ["log", "--oneline", "-n", &n].iter().for_each(|s| push(s));
+                if let Some(rev) = a.rev.as_deref() {
+                    push(safe_name(rev)?);
+                }
                 Review::None
             }
             Op::Show => {
@@ -236,6 +240,17 @@ impl Tool for Git {
     }
 }
 
+/// Branch and changed files, read-only and hardened like the tool. The agent
+/// shows it up front and after every git write, so the model never spends a
+/// step asking where it stands.
+pub async fn status(root: &Path) -> String {
+    let args = ["status", "--short", "--branch"].map(String::from).to_vec();
+    let ex = Exec { review: Review::None, env: ENV, hidden_args: HARDENING, ..Exec::new("git".into(), args, root.to_path_buf(), TIMEOUT) };
+    let out = crate::exec::run(&ex, root).await.unwrap_or_default();
+    let text = out.split_once("[stdout]\n").map_or("", |(_, s)| s.split("\n[stderr]").next().unwrap_or(""));
+    super::capped(text.lines().map(String::from).collect(), 15)
+}
+
 /// Branch or revision: no option injection, no odd characters.
 fn safe_name(s: &str) -> Result<&str, String> {
     let ok = !s.is_empty()
@@ -277,6 +292,8 @@ mod tests {
         assert!(plan(&mut c, json!({"op": "add", "all": true})).unwrap().0.contains(":(exclude,glob)**/.env"));
         assert_eq!(plan(&mut c, json!({"op": "show", "rev": "HEAD"})).unwrap().0, "show --no-ext-diff --no-textconv --patch-with-stat HEAD");
         assert!(plan(&mut c, json!({"op": "show", "rev": "--output=/tmp/x"})).is_err());
+        assert_eq!(plan(&mut c, json!({"op": "log", "rev": "main..hotfix"})).unwrap().0, "log --oneline -n 10 main..hotfix");
+        assert!(plan(&mut c, json!({"op": "log", "rev": "--output=/tmp/x"})).is_err());
         assert!(plan(&mut c, json!({"op": "switch", "name": "a;rm"})).is_err());
         assert!(plan(&mut c, json!({"op": "add", "paths": [".env"]})).is_err());
         assert!(plan(&mut c, json!({"op": "add", "paths": ["../x"]})).is_err());
@@ -308,6 +325,10 @@ mod tests {
         assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
         assert!(run(json!({"op": "log"})).await.contains("add a"));
         assert!(!root.join("HOOK_RAN").exists(), "hook ran");
+        std::fs::write(root.join("b.rs"), "").unwrap();
+        let st = super::status(&root).await;
+        assert!(st.starts_with("## ") && st.ends_with("?? b.rs"), "{st}");
+        std::fs::remove_file(root.join("b.rs")).unwrap();
 
         // Committed on the wrong branch: uncommit keeps the work, stash parks it.
         assert!(run(json!({"op": "uncommit"})).await.starts_with("exit 0"));
