@@ -83,7 +83,11 @@ pub fn brief(call: &ToolCall) -> String {
             Some(path) => format!("{p} in {path}"),
             None => p,
         }),
-        "move_file" => s("from").zip(s("to")).map(|(from, to)| format!("{from} → {to}")),
+        "move_file" => {
+            let pair = |v: &Value| Some(format!("{} → {}", v["from"].as_str()?, v["to"].as_str()?));
+            let moves: Vec<String> = pair(&args).into_iter().chain(args["moves"].as_array().into_iter().flatten().filter_map(pair)).collect();
+            (!moves.is_empty()).then(|| moves.join(", "))
+        }
         "replace" => s("old").zip(s("new")).map(|(old, new)| format!("{old} → {new}")),
         "web_fetch" => s("url"),
         "http_local" => args["port"].as_u64().map(|p| format!(":{p}{}", s("path").unwrap_or_default())),
@@ -92,7 +96,11 @@ pub fn brief(call: &ToolCall) -> String {
             [Some(op), detail].into_iter().flatten().collect::<Vec<_>>().join(" ")
         }),
         _ => s("path").or_else(|| {
-            let paths = args["paths"].as_array()?.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            // paths (read, delete) or files[].path (write, edit several at once).
+            let paths = match args["paths"].as_array() {
+                Some(list) => list.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+                None => args["files"].as_array()?.iter().filter_map(|f| f["path"].as_str()).collect(),
+            };
             Some(paths.join(", "))
         }),
     };
@@ -104,6 +112,14 @@ pub fn brief(call: &ToolCall) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn briefs_name_every_target_of_a_batch() {
+        let brief = |name: &str, args: &str| super::brief(&crate::message::ToolCall { id: "1".into(), name: name.into(), args: args.into() });
+        assert_eq!(brief("move_file", r#"{"moves":[{"from":"a","to":"b"},{"from":"c","to":"d"}]}"#), "move_file a → b, c → d");
+        assert_eq!(brief("write_file", r#"{"files":[{"path":"x.rs","content":""},{"path":"y.rs","content":""}]}"#), "write_file x.rs, y.rs");
+        assert_eq!(brief("edit_file", r#"{"path":"z.rs","edits":[]}"#), "edit_file z.rs");
+    }
+
     #[test]
     fn drafts_name_the_target_while_streaming() {
         assert_eq!(super::draft("write_file", r#"{"path": "src/a.rs", "content": "fn"#), "write_file src/a.rs");

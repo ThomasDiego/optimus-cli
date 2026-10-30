@@ -2,13 +2,25 @@ use serde::Deserialize;
 use serde_json::json;
 use similar::{DiffTag, TextDiff};
 
+use super::change::{self, Kind};
 use super::{Batch, Ctx, Outcome, Tool, file, matching, parse};
 use crate::message::ToolDef;
 
 pub struct Edit;
 
+const MAX_FILES: usize = 20;
+
 #[derive(Deserialize)]
 struct Args {
+    path: Option<String>,
+    #[serde(default)]
+    edits: Vec<Change>,
+    #[serde(default)]
+    files: Vec<FileEdits>,
+}
+
+#[derive(Deserialize)]
+struct FileEdits {
     path: String,
     edits: Vec<Change>,
 }
@@ -25,44 +37,67 @@ impl Tool for Edit {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "edit_file",
-            description: "Replace exact text in a file. Edits apply in order, all or none. Batch edits in one call.",
+            description: "Replace exact text in files. Edits apply in order, all or none. Batch edits in one call, several files with files.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "edits": {
+                    "edits": edits_schema(),
+                    "files": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old": {"type": "string", "description": "exact current text"},
-                                "new": {"type": "string"},
-                                "all": {"type": "boolean", "description": "replace every occurrence"}
-                            },
-                            "required": ["old", "new"]
-                        }
+                        "description": "several files at once",
+                        "items": {"type": "object", "properties": {"path": {"type": "string"}, "edits": edits_schema()}, "required": ["path", "edits"]}
                     }
-                },
-                "required": ["path", "edits"]
+                }
             }),
         }
     }
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
-        if a.edits.is_empty() {
-            return Err("edits is empty".into());
+        let single = a.path.map(|path| FileEdits { path, edits: a.edits });
+        let files: Vec<FileEdits> = single.into_iter().chain(a.files).collect();
+        if files.is_empty() || files.len() > MAX_FILES {
+            return Err(format!("give path and edits, or 1 to {MAX_FILES} files"));
         }
-        let rel = ctx.ws.rel_write(&a.path)?;
-        let current = file::read_text(ctx, &rel, &a.path)?;
-        file::ensure_fresh(ctx, &rel, &current, &a.path)?;
-        let updated = apply(&current, &a.edits)?;
-        if updated == current {
-            return Err("no change".into());
+        let many = files.len() > 1;
+        let (mut changes, mut done) = (vec![], vec![]);
+        for f in files {
+            // Errors name the file once several are edited together.
+            let tag = |e: String| if many { format!("{}: {e}", f.path) } else { e };
+            if f.edits.is_empty() {
+                return Err(tag("edits is empty".into()));
+            }
+            let rel = ctx.ws.rel_write(&f.path)?;
+            if changes.iter().any(|c: &change::Change| c.rel == rel) {
+                return Err(format!("{}: given twice; put all its edits in one entry", f.path));
+            }
+            let current = file::read_text(ctx, &rel, &f.path)?;
+            file::ensure_fresh(ctx, &rel, &current, &f.path)?;
+            let updated = apply(&current, &f.edits).map_err(tag)?;
+            if updated == current {
+                return Err(tag("no change".into()));
+            }
+            done.push(if many { format!("{} {}", f.path, summary(&current, &updated)) } else { summary(&current, &updated) });
+            changes.push(change::Change { rel, old: Some(current.into_bytes()), new: Some(updated.into_bytes()), kind: Kind::File });
         }
-        let ok = summary(&current, &updated);
-        Ok(Outcome::Write(Batch::single(rel, Some(current.into_bytes()), Some(updated.into_bytes()), ok)))
+        Ok(Outcome::Write(Batch { changes, ok: done.join("; "), known: true }))
     }
+}
+
+fn edits_schema() -> serde_json::Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "old": {"type": "string", "description": "exact current text"},
+                "new": {"type": "string"},
+                "all": {"type": "boolean", "description": "replace every occurrence"}
+            },
+            "required": ["old", "new"]
+        }
+    })
 }
 
 fn apply(content: &str, edits: &[Change]) -> Result<String, String> {
@@ -145,6 +180,22 @@ mod tests {
         let err = call(&mut c, "edit_file", edit("changed", "x")).unwrap_err();
         assert!(err.contains("changed since your last read") && err.ends_with("1\tchanged\n"), "{err}");
         assert!(call(&mut c, "edit_file", edit("changed", "x")).unwrap().starts_with("ok"));
+    }
+
+    #[test]
+    fn edits_several_files_all_or_none() {
+        let mut c = ctx("edit-many", &[("lib.rs", "pub mod utils;\n"), ("main.rs", "use utils;\n"), ("x.rs", "x")]);
+        call(&mut c, "read_file", json!({"paths": ["lib.rs", "main.rs", "x.rs"]})).unwrap();
+        let files = |second: &str| json!({"files": [
+            {"path": "lib.rs", "edits": [{"old": "utils", "new": "text"}]},
+            {"path": "main.rs", "edits": [{"old": second, "new": "text"}]}
+        ]});
+        // One miss refuses both, and says which file.
+        let err = call(&mut c, "edit_file", files("nope")).unwrap_err();
+        assert!(err.starts_with("main.rs: old not found"), "{err}");
+        assert_eq!(std::fs::read_to_string(c.ws.root.join("lib.rs")).unwrap(), "pub mod utils;\n");
+        assert_eq!(call(&mut c, "edit_file", files("utils")).unwrap(), "lib.rs ok L1 (+1/-1); main.rs ok L1 (+1/-1)");
+        assert_eq!(std::fs::read_to_string(c.ws.root.join("main.rs")).unwrap(), "use text;\n");
     }
 
     #[test]

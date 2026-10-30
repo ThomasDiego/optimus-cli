@@ -8,6 +8,7 @@ mod grep;
 mod http_local;
 mod list_dir;
 mod matching;
+mod mv;
 mod outline;
 mod process;
 mod read;
@@ -92,7 +93,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
         Box::new(edit::Edit),
         Box::new(replace::Replace),
         Box::new(write::Write),
-        Box::new(fs_ops::Move),
+        Box::new(mv::Move),
         Box::new(fs_ops::Delete),
         Box::new(glob::Glob),
         Box::new(grep::Grep),

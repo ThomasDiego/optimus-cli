@@ -8,9 +8,6 @@ use super::change::{Change, Kind};
 use super::{Batch, Ctx, Outcome, Tool, file, parse, trash};
 use crate::message::ToolDef;
 
-/// Moves or renames a file; the destination must not exist.
-pub struct Move;
-
 /// Deletes files and directories, all undoable: file content is snapshotted,
 /// directories with contents are parked in the trash.
 pub struct Delete;
@@ -21,54 +18,10 @@ const MAX_PATHS: usize = 50;
 const MAX_SCAN: usize = 1000;
 
 #[derive(Deserialize)]
-struct MoveArgs {
-    from: String,
-    to: String,
-}
-
-#[derive(Deserialize)]
 struct DeleteArgs {
     path: Option<String>,
     #[serde(default)]
     paths: Vec<String>,
-}
-
-impl Tool for Move {
-    fn def(&self) -> ToolDef {
-        ToolDef {
-            name: "move_file",
-            description: "Move or rename a file (parent dirs are created). Fails if the destination exists.",
-            schema: json!({
-                "type": "object",
-                "properties": {"from": {"type": "string"}, "to": {"type": "string"}},
-                "required": ["from", "to"]
-            }),
-        }
-    }
-
-    fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
-        let a: MoveArgs = parse(args)?;
-        let (from, to) = (ctx.ws.rel_write(&a.from)?, ctx.ws.rel_write(&a.to)?);
-        if ctx.ws.dir.try_exists(&to).map_err(|e| file::io_err(&a.to, e))? {
-            return Err(format!("{}: exists; delete it first or pick another name", a.to));
-        }
-        let bytes = file::read_bytes(ctx, &from, &a.from)?;
-        let mut changes = vec![
-            Change { rel: to.clone(), old: None, new: Some(bytes.clone()), kind: Kind::File },
-            Change { rel: from.clone(), old: Some(bytes), new: None, kind: Kind::File },
-        ];
-        // Like git mv, parents the move leaves empty go too (undoable).
-        let mut dir = from.parent();
-        while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty() && !to.starts_with(d)) {
-            if ctx.ws.dir.read_dir(d).map_or(true, |r| r.count() != 1) {
-                break;
-            }
-            changes.push(Change { rel: d.to_path_buf(), old: Some(vec![]), new: None, kind: Kind::Dir });
-            dir = d.parent();
-        }
-        // The model did not author this content: it must read before editing.
-        Ok(Outcome::Write(Batch { changes, ok: format!("moved {} → {}", a.from, a.to), known: false }))
-    }
 }
 
 impl Tool for Delete {
