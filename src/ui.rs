@@ -36,7 +36,13 @@ pub fn draft(name: &str, args: &str) -> String {
 /// One display line for a tool result, and whether it failed. A command that
 /// exited non-zero gets its first error line: "exit 128" alone says nothing.
 pub fn summary(ok: bool, output: &str) -> (String, bool) {
-    let first = output.lines().next().unwrap_or("").replace('\t', "  ");
+    // File contents (`12\ttext`) say nothing in one line: count them instead.
+    let numbered = |l: &&str| l.split_once('\t').is_some_and(|(n, _)| n.parse::<usize>().is_ok());
+    let first = match output.lines().next().unwrap_or("") {
+        l if ok && l.starts_with("==> ") => format!("{} files", output.lines().filter(|l| l.starts_with("==> ")).count()),
+        l if ok && numbered(&l) => format!("{} lines", output.lines().filter(numbered).count()),
+        l => l.replace('\t', "  "),
+    };
     let failed = !ok || (first.starts_with("exit ") && !first.starts_with("exit 0 ")) || first.starts_with("killed");
     if !ok || !failed {
         return (first, failed);
@@ -112,5 +118,7 @@ mod tests {
         assert_eq!(super::summary(true, out), ("exit 128 0.0s · fatal: not a git repository".into(), true));
         assert_eq!(super::summary(true, "exit 0 0.1s\n[stdout]\nok"), ("exit 0 0.1s".into(), false));
         assert_eq!(super::summary(false, "error: nope\nx"), ("error: nope".into(), true));
+        assert_eq!(super::summary(true, "1\t{\n2\t}"), ("2 lines".into(), false));
+        assert_eq!(super::summary(true, "==> a\n1\tx\n==> b\n1\ty"), ("2 files".into(), false));
     }
 }

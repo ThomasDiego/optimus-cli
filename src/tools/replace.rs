@@ -1,3 +1,5 @@
+use grep_matcher::{Captures, Matcher};
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -20,20 +22,23 @@ struct Args {
     glob: Option<String>,
     #[serde(default)]
     word: bool,
+    #[serde(default)]
+    regex: bool,
 }
 
 impl Tool for Replace {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "replace",
-            description: "Replace literal text in every file matching glob (default **/*): renames, API changes across files. No read needed; all or nothing; undoable.",
+            description: "Replace text in every file matching glob (default **/*): renames, API changes across files. No read needed; all or nothing; undoable.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "old": {"type": "string"},
                     "new": {"type": "string"},
                     "glob": {"type": "string", "description": "e.g. src/**/*.rs"},
-                    "word": {"type": "boolean", "description": "whole words only (add, not address)"}
+                    "word": {"type": "boolean", "description": "whole words only (add, not address)"},
+                    "regex": {"type": "boolean", "description": "old is a regex, new may use $1 or ${name}: e.g. f\\((\\w+)\\) -> f($1, 0)"}
                 },
                 "required": ["old", "new"]
             }),
@@ -45,13 +50,20 @@ impl Tool for Replace {
         if a.old.is_empty() || a.old == a.new {
             return Err("old must be non-empty and differ from new".into());
         }
+        let re = match a.regex {
+            true => Some(RegexMatcherBuilder::new().multi_line(true).word(a.word).build(&a.old).map_err(|e| format!("invalid regex: {e}"))?),
+            false => None,
+        };
         let (mut changes, mut total) = (vec![], 0);
         for path in glob::files(ctx, a.glob.as_deref().unwrap_or("**/*"), None)? {
             let shown = ctx.ws.display(&path);
             // Secrets, .git, binaries and huge files are simply not candidates.
             let Ok(rel) = ctx.ws.rel_write(&shown) else { continue };
             let Ok(text) = file::read_text(ctx, &rel, &shown) else { continue };
-            let (updated, n) = substitute(&text, &a.old, &a.new, a.word);
+            let (updated, n) = match &re {
+                Some(re) => substitute_re(re, &text, &a.new),
+                None => substitute(&text, &a.old, &a.new, a.word),
+            };
             if n > 0 {
                 total += n;
                 changes.push(Change { rel, old: Some(text.into_bytes()), new: Some(updated.into_bytes()), kind: Kind::File });
@@ -91,6 +103,21 @@ fn substitute(text: &str, old: &str, new: &str, word: bool) -> (String, usize) {
     (out, n)
 }
 
+/// Regex flavour of `substitute`: `$1`/`${name}` in `new` expand to groups.
+fn substitute_re(re: &RegexMatcher, text: &str, new: &str) -> (String, usize) {
+    let (mut out, mut n) = (Vec::with_capacity(text.len()), 0);
+    let Ok(mut caps) = re.new_captures() else { return (text.into(), 0) };
+    let done = re.replace_with_captures(text.as_bytes(), &mut caps, &mut out, |caps, dst| {
+        caps.interpolate(|name| re.capture_index(name), text.as_bytes(), new.as_bytes(), dst);
+        n += 1;
+        true
+    });
+    match (done, String::from_utf8(out)) {
+        (Ok(()), Ok(s)) => (s, n),
+        _ => (text.into(), 0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -103,6 +130,15 @@ mod tests {
     fn whole_words_only_when_asked() {
         assert_eq!(substitute("add(address, add_one, add)", "add", "sum", true), ("sum(address, add_one, sum)".into(), 2));
         assert_eq!(substitute("aaa", "aa", "b", false), ("ba".into(), 1));
+    }
+
+    #[test]
+    fn regex_expands_groups() {
+        let mut c = ctx("replace-re", &[("h1.rs", "shout(\"h1\")\n"), ("h2.rs", "shout(\"h2\") + shout(x)\n")]);
+        let ok = call(&mut c, "replace", json!({"old": r#"shout\(("h\d+")\)"#, "new": "shout($1, 1)", "regex": true})).unwrap();
+        assert_eq!(ok, "replaced 2 in 2 files: h1.rs, h2.rs");
+        assert_eq!(std::fs::read_to_string(c.ws.root.join("h2.rs")).unwrap(), "shout(\"h2\", 1) + shout(x)\n");
+        assert!(call(&mut c, "replace", json!({"old": "(", "new": "x", "regex": true})).unwrap_err().contains("invalid regex"));
     }
 
     #[test]
