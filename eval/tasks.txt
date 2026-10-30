@@ -37,6 +37,10 @@ multiedit|! grep -rq shout src && grep -rq yell src && cargo build -q|Remplace s
 testadd|grep -q test src/utils.rs && cargo test -q|Ajoute un test unitaire pour shout dans src/utils.rs et lance les tests.
 renamefile|test -e NOTES.md && test ! -e old_notes.txt|Renomme old_notes.txt en NOTES.md.
 gitignore|grep -qxE '/?target/?' .gitignore && grep -qx '.env' .gitignore|Crée un .gitignore qui ignore target/ et .env.
+uncommit|test "$(git rev-list --count HEAD)" -eq 1 && grep -q wip src/main.rs|Mon dernier commit était une erreur : annule-le mais garde les modifications.
+gitinit|test "$(git rev-list --count HEAD)" -ge 1 && test -z "$(git ls-files .env)"|Initialise un dépôt git et fais un premier commit de tout le projet.
+bigsrc|grep -q 'strict: bool' "$ANSWER"|Quelle est la signature exacte de parse_header dans src/big.rs ?
+logctx|grep -q 'request 17344' "$ANSWER" && grep -q 'disk full' "$ANSWER"|Montre-moi l'erreur de app.log avec la ligne juste avant.
 gitbranch|test "$(git branch --show-current)" = feature/x && git diff --quiet HEAD|Crée une branche feature/x et committe la modification en cours dessus.
 jsonedit|grep -qE '"port": *8080' config.json && python3 -m json.tool config.json|Passe le port à 8080 dans config.json.
 deltree|test ! -e dist && test -e src/lib.rs|Supprime le dossier dist.
