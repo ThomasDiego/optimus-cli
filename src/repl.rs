@@ -67,6 +67,7 @@ async fn show(ev: Event, lines: &mut mpsc::UnboundedReceiver<String>) {
             print!("{t}");
             let _ = io::stdout().flush();
         }
+        Event::Usage(_) => {}
         Event::ToolCall(call) => println!("\n{DIM}› {}{RESET}", brief(&call)),
         Event::ToolResult { ok, output } => {
             let first = truncate(output.lines().next().unwrap_or(""), 100);

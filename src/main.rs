@@ -8,7 +8,10 @@ mod provider;
 mod repl;
 mod sandbox;
 mod tools;
+mod tui;
 mod ui;
+
+use std::io::{self, IsTerminal};
 
 use anyhow::{Context, Result, bail};
 use tokio::sync::mpsc;
@@ -34,5 +37,13 @@ async fn main() -> Result<()> {
     let mut ctx = Ctx::new(ws, cfg.run_allow.clone());
     let (tx, mut events) = mpsc::unbounded_channel();
     let mut agent = Agent::new(provider, tools::all(), tx, Mode::Ask);
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        match tui::run(&mut agent, &mut ctx, &mut events, p.model.clone()).await {
+            // Terminals that cannot report the cursor get the line UI instead.
+            Err(tui::Error::Init(e)) => eprintln!("TUI indisponible ({e}), mode ligne"),
+            Err(tui::Error::Session(e)) => return Err(e),
+            Ok(()) => return Ok(()),
+        }
+    }
     repl::run(&mut agent, &mut ctx, &mut events, &header).await
 }

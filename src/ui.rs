@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use crate::message::ToolCall;
+use crate::message::{ToolCall, Usage};
 use crate::tools::truncate;
 
 /// Everything the agent shows or asks, consumed by the REPL or the TUI.
 pub enum Event {
     Text(String),
+    /// Tokens and cost of one model request, for live accounting.
+    Usage(Usage),
     ToolCall(ToolCall),
     ToolResult { ok: bool, output: String },
     /// A file was written without confirmation; shown to the user only.
@@ -36,6 +38,8 @@ pub fn brief(call: &ToolCall) -> String {
         }),
         _ => s("path"),
     };
-    let detail = detail.unwrap_or_else(|| call.args.clone());
-    format!("{} {}", call.name, truncate(&detail, 100))
+    match detail {
+        Some(d) => format!("{} {}", call.name, truncate(&d, 100)),
+        None => call.name.clone(),
+    }
 }
