@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -87,21 +88,21 @@ impl Tool for Git {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "git",
-            description: "Local git, no network. diff gives stat + patch. commit takes only what add staged. restore discards working changes. uncommit undoes the last commit, keeping its changes staged. revert/cherry_pick commit the undo/copy of rev; on conflict, fix the files, add, commit.",
+            description: "Local git, no network; writes return the new status. diff/show: stat + patch. commit takes only what add staged. restore discards working changes. uncommit: undo the last commit, its changes stay staged. revert/cherry_pick rev: on conflict, fix, add, commit.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "op": {"type": "string", "enum": ["status", "diff", "log", "show", "add", "commit", "branch", "switch", "restore", "init", "stash", "uncommit", "revert", "cherry_pick"]},
                     "paths": {"type": "array", "items": {"type": "string"}},
-                    "rev": {"type": "string", "description": "commit for show (default HEAD), revert, cherry_pick"},
-                    "message": {"type": "string", "description": "commit message"},
-                    "name": {"type": "string", "description": "branch name. branch: creates without switching (no name lists); switch create=true: creates and switches"},
+                    "rev": {"type": "string", "description": "commit (show: default HEAD); log: branch or a..b"},
+                    "message": {"type": "string"},
+                    "name": {"type": "string", "description": "branch: create it (none: list); switch: go to it, create=true for a new one"},
                     "n": {"type": "integer", "description": "log entries, default 10"},
                     "staged": {"type": "boolean", "description": "diff/restore the index"},
                     "all": {"type": "boolean", "description": "add every change (secrets excluded)"},
-                    "stat": {"type": "boolean", "description": "diff: stat only, for large changes"},
-                    "create": {"type": "boolean", "description": "switch: create the branch"},
-                    "pop": {"type": "boolean", "description": "stash: restore the latest stash instead of saving"}
+                    "stat": {"type": "boolean", "description": "diff: stat only"},
+                    "create": {"type": "boolean"},
+                    "pop": {"type": "boolean", "description": "stash: restore the latest"}
                 },
                 "required": ["op"]
             }),
@@ -144,13 +145,18 @@ impl Tool for Git {
             Op::Log => {
                 let n = a.n.unwrap_or(10).clamp(1, MAX_LOG).to_string();
                 ["log", "--oneline", "-n", &n].iter().for_each(|s| push(s));
+                if let Some(rev) = a.rev.as_deref() {
+                    push(safe_name(rev)?);
+                }
                 Review::None
             }
             Op::Show => {
                 let rev = safe_name(a.rev.as_deref().unwrap_or("HEAD"))?;
                 ["show", "--no-ext-diff", "--no-textconv"].iter().for_each(|s| push(s));
                 if paths.is_empty() {
-                    push("--stat");
+                    // Stat then patch: without it `--stat` alone hides the diff,
+                    // and the model would retry through a shell to see it.
+                    push("--patch-with-stat");
                 }
                 push(rev);
                 Review::None
@@ -234,6 +240,32 @@ impl Tool for Git {
     }
 }
 
+/// Branch and changed files, read-only and hardened like the tool. The agent
+/// shows it up front and after every git write, so the model never spends a
+/// step asking where it stands.
+pub async fn status(root: &Path) -> String {
+    super::capped(read_only(root, &["status", "--short", "--branch"]).await.lines().map(String::from).collect(), 15)
+}
+
+/// Appended to a git write's result so the model has nothing to check: the
+/// new status, plus the patch of the commit a revert or cherry_pick made.
+pub async fn after_write(root: &Path, args: &[String], ok: bool) -> String {
+    let mut out = format!("[git status]\n{}", status(root).await);
+    if ok && matches!(args.first().map(String::as_str), Some("revert" | "cherry-pick")) {
+        let patch = read_only(root, &["show", "--no-ext-diff", "--no-textconv", "--format=", "--patch-with-stat", "HEAD"]).await;
+        out.push_str(&format!("\n[new commit]\n{}", crate::exec::clip(&patch)));
+    }
+    out
+}
+
+/// Stdout of a hardened, read-only git command.
+async fn read_only(root: &Path, args: &[&str]) -> String {
+    let args = args.iter().map(|s| s.to_string()).collect();
+    let ex = Exec { review: Review::None, env: ENV, hidden_args: HARDENING, ..Exec::new("git".into(), args, root.to_path_buf(), TIMEOUT) };
+    let out = crate::exec::run(&ex, root).await.unwrap_or_default();
+    out.split_once("[stdout]\n").map_or("", |(_, s)| s.split("\n[stderr]").next().unwrap_or("")).trim().to_string()
+}
+
 /// Branch or revision: no option injection, no odd characters.
 fn safe_name(s: &str) -> Result<&str, String> {
     let ok = !s.is_empty()
@@ -273,7 +305,10 @@ mod tests {
         assert_eq!(plan(&mut c, json!({"op": "diff", "paths": ["a.rs"]})).unwrap().0, "diff --no-ext-diff --no-textconv --patch-with-stat -- a.rs");
         assert_eq!(plan(&mut c, json!({"op": "commit", "message": "--amend"})).unwrap(), ("commit -m --amend".into(), true));
         assert!(plan(&mut c, json!({"op": "add", "all": true})).unwrap().0.contains(":(exclude,glob)**/.env"));
+        assert_eq!(plan(&mut c, json!({"op": "show", "rev": "HEAD"})).unwrap().0, "show --no-ext-diff --no-textconv --patch-with-stat HEAD");
         assert!(plan(&mut c, json!({"op": "show", "rev": "--output=/tmp/x"})).is_err());
+        assert_eq!(plan(&mut c, json!({"op": "log", "rev": "main..hotfix"})).unwrap().0, "log --oneline -n 10 main..hotfix");
+        assert!(plan(&mut c, json!({"op": "log", "rev": "--output=/tmp/x"})).is_err());
         assert!(plan(&mut c, json!({"op": "switch", "name": "a;rm"})).is_err());
         assert!(plan(&mut c, json!({"op": "add", "paths": [".env"]})).is_err());
         assert!(plan(&mut c, json!({"op": "add", "paths": ["../x"]})).is_err());
@@ -305,6 +340,10 @@ mod tests {
         assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
         assert!(run(json!({"op": "log"})).await.contains("add a"));
         assert!(!root.join("HOOK_RAN").exists(), "hook ran");
+        std::fs::write(root.join("b.rs"), "").unwrap();
+        let st = super::status(&root).await;
+        assert!(st.starts_with("## ") && st.ends_with("?? b.rs"), "{st}");
+        std::fs::remove_file(root.join("b.rs")).unwrap();
 
         // Committed on the wrong branch: uncommit keeps the work, stash parks it.
         assert!(run(json!({"op": "uncommit"})).await.starts_with("exit 0"));
@@ -319,6 +358,11 @@ mod tests {
         assert!(run(json!({"op": "commit", "message": "add a"})).await.starts_with("exit 0"));
         assert!(run(json!({"op": "revert", "rev": "HEAD"})).await.starts_with("exit 0"));
         assert!(!root.join("a.rs").exists());
+        // The model sees what the revert did without reading the files.
+        let revert = vec!["revert".to_string()];
+        let after = super::after_write(&root, &revert, true).await;
+        assert!(after.starts_with("[git status]\n## ") && after.contains("[new commit]") && after.contains("-a"), "{after}");
+        assert!(!super::after_write(&root, &revert, false).await.contains("[new commit]"));
         assert!(run(json!({"op": "cherry_pick", "rev": "HEAD~1"})).await.starts_with("exit 0"));
         assert_eq!(std::fs::read_to_string(root.join("a.rs")).unwrap(), "a\n");
     }

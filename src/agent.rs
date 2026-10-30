@@ -16,7 +16,7 @@ use crate::ui::{self, Approval, Event};
 const SYSTEM: &str = "You are ai, a coding agent in the user's project directory. \
 There is no shell: use the tools; run starts allowed programs directly. \
 Paths are relative to the project root; nothing outside it is reachable. \
-Read only the files the task needs, before editing them: the project overview is enough to orient, never read unrelated files to explore. In a large file, read a range around a line you know (e.g. from an error), else outline it or grep with context. Prefer edit_file and batch edits in one call; the same change in several files is one replace call (regex when parts vary). \
+Read only the files the task needs, before editing them: the project overview (files, git status) is enough to orient, never read unrelated files to explore. In a large file, read a range around a line you know (e.g. from an error), else grep with context or read it without a range for its outline. Prefer edit_file and batch edits in one call; the same change in several files is one replace call (regex when parts vary). \
 Call independent tools together in one reply; read_file takes paths to read several files at once. \
 Do exactly what was asked: no extra files, features, docs or refactors unless requested; never clean up build outputs or files you did not create. \
 UI design: every visual choice must serve an explicit purpose (hierarchy, identity, legibility); ban AI tells (generic blue-purple, pill/floating cards everywhere, emoji icons, centered hero, soft shadows, gratuitous animation); if the logo is swapped, the design must still feel unique; never use color gradients in UI. \
@@ -58,9 +58,11 @@ impl<P: Provider> Agent<P> {
         if self.messages.is_empty() {
             // Capped lower than list_dir: it is paid on every request of the session.
             notes.push(format!("[Project files, depth 2]\n{}", tools::tree(ctx, &ctx.ws.root, 2, 80)));
-            if !ctx.ws.dir.is_dir(".git") {
-                notes.push("[Not a git repository]".into());
-            }
+            // Saves the git status every git task opens with.
+            notes.push(match ctx.ws.dir.is_dir(".git") {
+                true => format!("[Git status]\n{}", tools::git_status(&ctx.ws.root).await),
+                false => "[Not a git repository]".into(),
+            });
         }
         let stale = tools::stale(ctx);
         if !stale.is_empty() {
@@ -83,7 +85,7 @@ impl<P: Provider> Agent<P> {
             usage += reply.usage;
             self.emit(Event::Usage(reply.usage));
             let calls = reply.calls.clone();
-            self.messages.push(Message::Assistant { text: reply.text, calls: reply.calls });
+            self.messages.push(Message::Assistant { text: reply.text, calls: reply.calls, reasoning: reply.reasoning });
             if calls.is_empty() {
                 return Ok(usage);
             }
@@ -131,7 +133,12 @@ impl<P: Provider> Agent<P> {
                     return ctx.jobs.start(&ex, &ctx.ws.root).await;
                 }
                 let before = track::snapshot(&ctx.ws);
-                let out = exec::run(&ex, &ctx.ws.root).await?;
+                let mut out = exec::run(&ex, &ctx.ws.root).await?;
+                // After a git write, the new state comes with it: no checking step.
+                if ex.git {
+                    let after = tools::git_after_write(&ctx.ws.root, &ex.args, out.starts_with("exit 0")).await;
+                    out = format!("{out}\n{after}");
+                }
                 let Some(before) = before else { return Ok(out) };
                 let after = track::snapshot(&ctx.ws).unwrap_or_default();
                 Ok(track::annotate(out, &track::changes(&before, &after)))
@@ -148,8 +155,14 @@ impl<P: Provider> Agent<P> {
                 Err(e) => {
                     // A request that crashes the server only shows up as a reset.
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    let gone = !ctx.jobs.ports().contains(&port);
-                    Err(if gone { format!("{e}; the server exited (crashed?), process output shows why") } else { e })
+                    if ctx.jobs.ports().contains(&port) {
+                        return Err(e);
+                    }
+                    // Its crash output comes along: no process call to see why.
+                    Err(match ctx.jobs.output_on(port) {
+                        Some(out) => format!("{e}; the server exited:\n{out}"),
+                        None => format!("{e}; the server exited (crashed?)"),
+                    })
                 }
                 ok => ok,
             },
@@ -206,12 +219,26 @@ mod tests {
         }
     }
 
+    /// The system prompt and tool schemas are re-sent on every step: most of
+    /// a session's input tokens. Run with --nocapture to see each tool's share.
+    #[test]
+    fn fixed_prefix_stays_small() {
+        let defs: Vec<ToolDef> = tools::all().iter().map(|t| t.def()).collect();
+        let size = |d: &ToolDef| d.description.len() + d.schema.to_string().len();
+        for d in &defs {
+            println!("{:>5} {}", size(d), d.name);
+        }
+        let total = SYSTEM.len() + defs.iter().map(size).sum::<usize>();
+        println!("{:>5} system\n{total:>5} total chars", SYSTEM.len());
+        assert!(total < 12_000, "prefix grew to {total} chars");
+    }
+
     #[test]
     fn heal_answers_dangling_calls_only() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut agent = Agent::new(Silent, vec![], tx, Mode::Ask);
         let call = |id: &str| ToolCall { id: id.into(), name: "read_file".into(), args: "{}".into() };
-        agent.messages.push(Message::Assistant { text: String::new(), calls: vec![call("a"), call("b")] });
+        agent.messages.push(Message::Assistant { text: String::new(), calls: vec![call("a"), call("b")], reasoning: String::new() });
         agent.messages.push(Message::Tool { id: "a".into(), content: "ok".into() });
         agent.heal();
         agent.heal();

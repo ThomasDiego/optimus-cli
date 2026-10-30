@@ -22,7 +22,10 @@ impl OpenAiCompat {
 
     fn body(&self, req: &Request) -> Value {
         let mut messages = vec![json!({"role": "system", "content": req.system})];
-        messages.extend(req.messages.iter().map(wire));
+        // Reasoning goes back only inside the running tool loop, where
+        // DeepSeek requires it; older turns' thinking would only cost tokens.
+        let loop_start = req.messages.iter().rposition(|m| matches!(m, Message::User(_))).unwrap_or(0);
+        messages.extend(req.messages.iter().enumerate().map(|(i, m)| wire(m, i > loop_start)));
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -75,11 +78,15 @@ impl Provider for OpenAiCompat {
     }
 }
 
-fn wire(m: &Message) -> Value {
+fn wire(m: &Message, current: bool) -> Value {
     match m {
         Message::User(text) => json!({"role": "user", "content": text}),
-        Message::Assistant { text, calls } => {
+        Message::Assistant { text, calls, reasoning } => {
             let mut v = json!({"role": "assistant", "content": if text.is_empty() { Value::Null } else { text.as_str().into() }});
+            // DeepSeek's name; OpenRouter takes it as an alias of `reasoning`.
+            if current && !reasoning.is_empty() {
+                v["reasoning_content"] = reasoning.as_str().into();
+            }
             if !calls.is_empty() {
                 v["tool_calls"] = calls
                     .iter()
@@ -109,6 +116,10 @@ fn apply(reply: &mut Reply, v: &Value, on: &mut dyn FnMut(Delta<'_>)) -> Result<
         };
     }
     let Some(delta) = v.pointer("/choices/0/delta") else { return Ok(()) };
+    // OpenRouter streams `reasoning`, DeepSeek's own API `reasoning_content`.
+    if let Some(r) = delta["reasoning"].as_str().or_else(|| delta["reasoning_content"].as_str()) {
+        reply.reasoning.push_str(r);
+    }
     if let Some(text) = delta["content"].as_str().filter(|t| !t.is_empty()) {
         on(Delta::Text(text));
         reply.text.push_str(text);
@@ -161,6 +172,22 @@ mod tests {
         assert_eq!((reply.calls[0].id.as_str(), reply.calls[0].name.as_str()), ("c1", "read_file"));
         assert_eq!(reply.calls[0].args, r#"{"path":"a"}"#);
         assert_eq!((reply.usage.input, reply.usage.cached, reply.usage.cost), (10, 8, 0.5));
+    }
+
+    #[test]
+    fn reasoning_goes_back_only_inside_the_running_tool_loop() {
+        let (reply, seen) = fold(&[
+            r#"{"choices":[{"delta":{"reasoning":"think "}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"more"}}]}"#,
+        ]);
+        assert_eq!((reply.reasoning.as_str(), seen.as_str()), ("think more", ""));
+
+        let said = |r: &str| Message::Assistant { text: String::new(), calls: vec![], reasoning: r.into() };
+        let messages = [Message::User("a".into()), said("old"), Message::User("b".into()), said("new")];
+        let p = OpenAiCompat::new("http://x", String::new(), "m".into(), vec![]);
+        let body = p.body(&Request { system: "s", messages: &messages, tools: &[] });
+        let sent: Vec<&Value> = body["messages"].as_array().unwrap().iter().map(|m| &m["reasoning_content"]).collect();
+        assert_eq!(sent, [&Value::Null, &Value::Null, &Value::Null, &Value::Null, &json!("new")]);
     }
 
     #[test]

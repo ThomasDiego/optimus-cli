@@ -103,6 +103,9 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         vec![],
     ];
     let mode_label = format!(" {}", mode.name());
+    if app.quit_armed() {
+        return Line::from(vec![Span::styled(mode_label, mode_style), Span::styled(" · ctrl+c again to quit", Style::new().fg(Color::Yellow))]);
+    }
     let jobs = match app.jobs {
         0 => String::new(),
         1 => " · 1 job".into(),

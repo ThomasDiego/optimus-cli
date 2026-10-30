@@ -75,7 +75,15 @@ async fn session<P: Provider>(
     loop {
         app.jobs = ctx.jobs.running();
         draw(term, &mut app)?;
-        let Some(ev) = keys.recv().await else { return Ok(()) };
+        // While a Ctrl+C is armed, wake when it expires to clear its hint.
+        let ev = match app.quit_until.filter(|_| app.quit_armed()) {
+            Some(until) => tokio::select! {
+                ev = keys.recv() => ev,
+                _ = tokio::time::sleep_until(until.into()) => continue,
+            },
+            None => keys.recv().await,
+        };
+        let Some(ev) = ev else { return Ok(()) };
         let input = match app.on_term(ev) {
             Action::Submit(s) => s,
             Action::Quit => return Ok(()),

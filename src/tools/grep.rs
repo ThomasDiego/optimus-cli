@@ -12,6 +12,10 @@ use crate::message::ToolDef;
 use crate::sandbox::is_secret;
 
 const CAP: usize = 100;
+/// A directory search without a mode shows the matching lines when they fit
+/// in this many output lines, file names otherwise: saves the read that
+/// follows a short file list.
+const AUTO_LINES: usize = 60;
 const MAX_LINE: usize = 200;
 const MAX_CONTEXT: usize = 10;
 
@@ -73,7 +77,7 @@ impl Tool for Grep {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "grep",
-            description: "Regex search in files. mode: files (default; content if path is a file), count (per file; tally values with python3 -c), content (path, then line:text per match; context adds surrounding line-text, saving a read_file).",
+            description: "Regex search in files. mode: content (path, then line:text per match; context adds surrounding line-text, saving a read_file), files, count (per file; tally values with python3 -c). Default: content when it is short, else files.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -100,8 +104,11 @@ impl Tool for Grep {
             Some(g) => Some(Glob::new(g).map_err(|e| format!("invalid glob: {e}"))?.compile_matcher()),
             None => None,
         };
-        // Listing the one file searched answers nothing: show its lines.
-        let mode = a.mode.unwrap_or(if base.is_file() { Mode::Content } else { Mode::Files });
+        // No mode: content, falling back to file names past AUTO_LINES (a single
+        // file always shows its lines: listing its name answers nothing).
+        let auto = a.mode.is_none() && !base.is_file();
+        let mode = a.mode.unwrap_or(Mode::Content);
+        let (mut names, mut shown_files, mut overflow, mut sample) = (vec![], vec![], false, vec![]);
         let around = a.context.min(MAX_CONTEXT);
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(0))
@@ -125,6 +132,13 @@ impl Tool for Grep {
             }
             let shown = ctx.ws.display(path);
             match mode {
+                Mode::Files | Mode::Content if overflow => {
+                    let mut hit = false;
+                    let _ = searcher.search_path(&matcher, path, UTF8(|_, _| { hit = true; Ok(false) }));
+                    if hit {
+                        names.push(shown);
+                    }
+                }
                 Mode::Files => {
                     let mut hit = false;
                     let _ = searcher.search_path(&matcher, path, UTF8(|_, _| { hit = true; Ok(false) }));
@@ -143,17 +157,33 @@ impl Tool for Grep {
                     let mut lines = vec![];
                     let _ = searcher.search_path(&matcher, path, Lines { out: &mut lines });
                     if !lines.is_empty() {
-                        seen(ctx, path);
+                        names.push(shown.clone());
+                        shown_files.push(path.to_path_buf());
                         out.push(shown);
                         out.append(&mut lines);
                     }
                 }
+            }
+            // Too long for auto content: keep walking, for the names only.
+            if auto && !overflow && out.len() > AUTO_LINES {
+                overflow = true;
+                // A few first matches show the pattern, often enough to skip a read.
+                sample = out.drain(..).take(6).collect();
+                shown_files.clear();
+                continue;
             }
             if out.len() > CAP {
                 out.truncate(CAP);
                 out.push("[truncated: narrow the search, or tally with python3 -c]".into());
                 break;
             }
+        }
+        if overflow {
+            return Ok(Outcome::Done(format!("{}\n[first matches]\n{}", super::capped(names, CAP), sample.join("\n"))));
+        }
+        // Only lines actually returned count as seen.
+        for path in shown_files {
+            seen(ctx, &path);
         }
         Ok(Outcome::Done(if out.is_empty() { "no match".into() } else { out.join("\n") }))
     }
@@ -180,7 +210,8 @@ mod tests {
     #[test]
     fn modes_filters_and_secrets() {
         let mut c = ctx("grep", &[("src/a.rs", "fn main() {}\nfn x() {}\n"), ("b.md", "fn doc"), (".env", "fn=SECRET")]);
-        assert_eq!(call(&mut c, "grep", json!({"pattern": "fn"})).unwrap(), "b.md\nsrc/a.rs");
+        assert_eq!(call(&mut c, "grep", json!({"pattern": "fn"})).unwrap(), "b.md\n1:fn doc\nsrc/a.rs\n1:fn main() {}\n2:fn x() {}");
+        assert_eq!(call(&mut c, "grep", json!({"pattern": "fn", "mode": "files"})).unwrap(), "b.md\nsrc/a.rs");
         assert_eq!(call(&mut c, "grep", json!({"pattern": "fn", "glob": "*.rs", "mode": "count"})).unwrap(), "src/a.rs:2");
         assert_eq!(call(&mut c, "grep", json!({"pattern": "X\\(", "i": true, "mode": "content"})).unwrap(), "src/a.rs\n2:fn x() {}");
         assert_eq!(call(&mut c, "grep", json!({"pattern": "SECRET"})).unwrap(), "no match");
@@ -194,6 +225,19 @@ mod tests {
         let mut c = ctx("grep-ctx", &[("f.txt", body)]);
         let out = call(&mut c, "grep", json!({"pattern": "TARGET", "mode": "content", "context": 1})).unwrap();
         assert_eq!(out, "f.txt\n2-b\n3:TARGET\n4-c\n--\n8-g\n9:TARGET\n10-h");
+    }
+
+    #[test]
+    fn long_default_search_falls_back_to_names_unseen() {
+        let files: Vec<(String, String)> = (1..=40).map(|i| (format!("h{i:02}.rs"), format!("shout(\"h{i}\")\n"))).collect();
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+        let mut c = ctx("grep-auto", &refs);
+        let out = call(&mut c, "grep", json!({"pattern": "shout"})).unwrap();
+        let (names, sample) = out.split_once("\n[first matches]\n").unwrap();
+        assert_eq!(names.lines().count(), 40, "{out}");
+        assert!(names.starts_with("h01.rs\nh02.rs\n") && !names.contains(':'), "{out}");
+        assert_eq!(sample, "h01.rs\n1:shout(\"h1\")\nh02.rs\n1:shout(\"h2\")\nh03.rs\n1:shout(\"h3\")");
+        assert!(c.reads.is_empty(), "a sample is not a read: editing still needs one");
     }
 
     #[test]

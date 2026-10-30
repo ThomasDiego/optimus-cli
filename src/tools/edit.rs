@@ -2,19 +2,24 @@ use serde::Deserialize;
 use serde_json::json;
 use similar::{DiffTag, TextDiff};
 
+use super::change::{self, Kind};
 use super::{Batch, Ctx, Outcome, Tool, file, matching, parse};
 use crate::message::ToolDef;
 
 pub struct Edit;
 
+const MAX_FILES: usize = 20;
+
 #[derive(Deserialize)]
 struct Args {
-    path: String,
+    path: Option<String>,
     edits: Vec<Change>,
 }
 
 #[derive(Deserialize)]
 struct Change {
+    /// Another file than the call's path: one call edits several files.
+    path: Option<String>,
     old: String,
     new: String,
     #[serde(default)]
@@ -25,7 +30,7 @@ impl Tool for Edit {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "edit_file",
-            description: "Replace exact text in a file. Edits apply in order, all or none. Batch edits in one call.",
+            description: "Replace exact text in files. Edits apply in order, all or none. Batch edits in one call, across files too.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -35,6 +40,7 @@ impl Tool for Edit {
                         "items": {
                             "type": "object",
                             "properties": {
+                                "path": {"type": "string", "description": "another file than path"},
                                 "old": {"type": "string", "description": "exact current text"},
                                 "new": {"type": "string"},
                                 "all": {"type": "boolean", "description": "replace every occurrence"}
@@ -43,7 +49,7 @@ impl Tool for Edit {
                         }
                     }
                 },
-                "required": ["path", "edits"]
+                "required": ["edits"]
             }),
         }
     }
@@ -53,19 +59,41 @@ impl Tool for Edit {
         if a.edits.is_empty() {
             return Err("edits is empty".into());
         }
-        let rel = ctx.ws.rel_write(&a.path)?;
-        let current = file::read_text(ctx, &rel, &a.path)?;
-        file::ensure_fresh(ctx, &rel, &current, &a.path)?;
-        let updated = apply(&current, &a.edits)?;
-        if updated == current {
-            return Err("no change".into());
+        // Group by file, first-seen order; each file's edits keep their order.
+        let mut files: Vec<(String, Vec<&Change>)> = vec![];
+        for e in &a.edits {
+            let path = e.path.as_ref().or(a.path.as_ref()).ok_or("each edit needs a path (or set path for all)")?;
+            match files.iter_mut().find(|(p, _)| p == path) {
+                Some((_, list)) => list.push(e),
+                None => files.push((path.clone(), vec![e])),
+            }
         }
-        let ok = summary(&current, &updated);
-        Ok(Outcome::Write(Batch::single(rel, Some(current.into_bytes()), Some(updated.into_bytes()), ok)))
+        if files.len() > MAX_FILES {
+            return Err(format!("at most {MAX_FILES} files per call; the same change in many files is one replace call (no read needed)"));
+        }
+        let many = files.len() > 1;
+        let (mut changes, mut done) = (vec![], vec![]);
+        for (path, edits) in files {
+            // Errors name the file once several are edited together.
+            let tag = |e: String| if many { format!("{path}: {e}") } else { e };
+            let rel = ctx.ws.rel_write(&path)?;
+            if changes.iter().any(|c: &change::Change| c.rel == rel) {
+                return Err(format!("{path}: named two ways; use one spelling"));
+            }
+            let current = file::read_text(ctx, &rel, &path)?;
+            file::ensure_fresh(ctx, &rel, &current, &path)?;
+            let updated = apply(&current, &edits).map_err(tag)?;
+            if updated == current {
+                return Err(tag("no change".into()));
+            }
+            done.push(if many { format!("{path} {}", summary(&current, &updated)) } else { summary(&current, &updated) });
+            changes.push(change::Change { rel, old: Some(current.into_bytes()), new: Some(updated.into_bytes()), kind: Kind::File });
+        }
+        Ok(Outcome::Write(Batch { changes, ok: done.join("; "), known: true }))
     }
 }
 
-fn apply(content: &str, edits: &[Change]) -> Result<String, String> {
+fn apply(content: &str, edits: &[&Change]) -> Result<String, String> {
     let crlf = content.contains("\r\n");
     let mut text = content.to_string();
     for (k, e) in edits.iter().enumerate() {
@@ -145,6 +173,23 @@ mod tests {
         let err = call(&mut c, "edit_file", edit("changed", "x")).unwrap_err();
         assert!(err.contains("changed since your last read") && err.ends_with("1\tchanged\n"), "{err}");
         assert!(call(&mut c, "edit_file", edit("changed", "x")).unwrap().starts_with("ok"));
+    }
+
+    #[test]
+    fn edits_several_files_all_or_none() {
+        let mut c = ctx("edit-many", &[("lib.rs", "pub mod utils;\n"), ("main.rs", "use utils;\n"), ("x.rs", "x")]);
+        call(&mut c, "read_file", json!({"paths": ["lib.rs", "main.rs", "x.rs"]})).unwrap();
+        // path is the default; an edit's own path targets another file.
+        let files = |second: &str| json!({"path": "lib.rs", "edits": [
+            {"old": "utils", "new": "text"},
+            {"path": "main.rs", "old": second, "new": "text"}
+        ]});
+        // One miss refuses both, and says which file.
+        let err = call(&mut c, "edit_file", files("nope")).unwrap_err();
+        assert!(err.starts_with("main.rs: old not found"), "{err}");
+        assert_eq!(std::fs::read_to_string(c.ws.root.join("lib.rs")).unwrap(), "pub mod utils;\n");
+        assert_eq!(call(&mut c, "edit_file", files("utils")).unwrap(), "lib.rs ok L1 (+1/-1); main.rs ok L1 (+1/-1)");
+        assert_eq!(std::fs::read_to_string(c.ws.root.join("main.rs")).unwrap(), "use text;\n");
     }
 
     #[test]

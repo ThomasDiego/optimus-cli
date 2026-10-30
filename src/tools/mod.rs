@@ -8,6 +8,7 @@ mod grep;
 mod http_local;
 mod list_dir;
 mod matching;
+mod mv;
 mod outline;
 mod process;
 mod read;
@@ -30,6 +31,7 @@ use crate::web::Fetch;
 
 pub use change::Batch;
 pub use file::stale;
+pub use git::{after_write as git_after_write, status as git_status};
 pub use list_dir::tree;
 pub use file::truncate;
 
@@ -87,11 +89,10 @@ pub trait Tool {
 pub fn all() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(read::Read),
-        Box::new(outline::Outline),
         Box::new(edit::Edit),
         Box::new(replace::Replace),
         Box::new(write::Write),
-        Box::new(fs_ops::Move),
+        Box::new(mv::Move),
         Box::new(fs_ops::Delete),
         Box::new(glob::Glob),
         Box::new(grep::Grep),
