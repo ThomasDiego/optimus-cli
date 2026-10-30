@@ -5,6 +5,9 @@ use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 use ignore::WalkBuilder;
 
+/// Where deleted directories wait for undo, inside the project.
+pub const TRASH: &str = ".ai-trash";
+
 /// The launch directory. All file I/O goes through `dir`, a capability handle
 /// that cannot resolve paths outside it (no `..`, absolute or symlink escape).
 pub struct Workspace {
@@ -38,13 +41,16 @@ impl Workspace {
         Ok(rel)
     }
 
-    /// Like `rel`, but `.git/` is only writable through git tools.
+    /// Like `rel`, but `.git/` is only writable through git tools, and the
+    /// trash only through undo.
     pub fn rel_write(&self, path: &str) -> Result<PathBuf, String> {
         let rel = self.rel(path)?;
-        let in_git = |p: &Path| p.components().any(|c| c.as_os_str() == ".git");
-        let real_in_git = self.real(&rel).is_some_and(|r| in_git(r.strip_prefix(&self.root).unwrap_or(&r)));
-        if in_git(&rel) || real_in_git {
-            return Err(format!("{path}: .git is read-only"));
+        for guarded in [".git", TRASH] {
+            let inside = |p: &Path| p.components().any(|c| c.as_os_str() == guarded);
+            let real_inside = self.real(&rel).is_some_and(|r| inside(r.strip_prefix(&self.root).unwrap_or(&r)));
+            if inside(&rel) || real_inside {
+                return Err(format!("{path}: {guarded} is read-only"));
+            }
         }
         Ok(rel)
     }
@@ -60,14 +66,14 @@ impl Workspace {
         Ok(abs)
     }
 
-    /// Walker that never follows symlinks and skips `.git`.
+    /// Walker that never follows symlinks and skips `.git` and the trash.
     pub fn walker(&self, base: &Path) -> WalkBuilder {
         let mut w = WalkBuilder::new(base);
         w.hidden(false)
             .follow_links(false)
             .require_git(false)
             .sort_by_file_name(|a, b| a.cmp(b))
-            .filter_entry(|e| e.file_name() != ".git");
+            .filter_entry(|e| e.file_name() != ".git" && e.file_name() != TRASH);
         w
     }
 

@@ -1,19 +1,29 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use similar::TextDiff;
 
-use super::{Ctx, FileState, file};
+use super::{Ctx, FileState, file, trash};
 
 /// Undo history depth, in turns.
 const MAX_TURNS: usize = 20;
+
+/// What a change touches.
+#[derive(Clone, PartialEq)]
+pub enum Kind {
+    File,
+    /// An empty directory: present is `Some(empty)`, contents are never stored.
+    Dir,
+    /// A directory with contents: deleting parks it in `slot` (one rename,
+    /// whatever its size) until undone or purged.
+    Tree { slot: PathBuf, files: usize },
+}
 
 /// One file going from `old` to `new`; `None` means absent.
 pub struct Change {
     pub rel: PathBuf,
     pub old: Option<Vec<u8>>,
     pub new: Option<Vec<u8>>,
-    /// An empty directory: present is `Some(empty)`, contents are never stored.
-    pub dir: bool,
+    pub kind: Kind,
 }
 
 /// Changes prepared by a tool, applied all or nothing once permitted
@@ -30,12 +40,12 @@ pub struct Batch {
 pub struct Snapshot {
     rel: PathBuf,
     old: Option<Vec<u8>>,
-    dir: bool,
+    kind: Kind,
 }
 
 impl Batch {
     pub fn single(rel: PathBuf, old: Option<Vec<u8>>, new: Option<Vec<u8>>, ok: String) -> Self {
-        Self { changes: vec![Change { rel, old, new, dir: false }], ok, known: true }
+        Self { changes: vec![Change { rel, old, new, kind: Kind::File }], ok, known: true }
     }
 
     /// What the user is asked about: `src/a.rs` or `a.rs → b.rs`.
@@ -59,13 +69,22 @@ impl Batch {
 
 impl Change {
     fn diff(&self) -> String {
-        if self.dir {
-            return format!("{}/ (empty directory)", self.rel.display());
-        }
-        let text = |b: &Option<Vec<u8>>| std::str::from_utf8(b.as_deref().unwrap_or(b"")).map(str::to_string).ok();
-        match (text(&self.old), text(&self.new)) {
-            (Some(old), Some(new)) => TextDiff::from_lines(&old, &new).unified_diff().context_radius(2).to_string(),
-            _ => "(binary)".into(),
+        let rel = self.rel.display();
+        match (&self.kind, &self.new) {
+            (Kind::Tree { files, .. }, _) => format!("supprimé : {rel}/ ({files} fichiers, annulable)"),
+            (Kind::Dir, _) => format!("supprimé : {rel}/ (vide)"),
+            // A deleted file's content tells the user nothing: its size does.
+            (Kind::File, None) => {
+                let lines = self.old.as_deref().map_or(0, |b| String::from_utf8_lossy(b).lines().count());
+                format!("supprimé : {rel} ({lines} lignes)")
+            }
+            (Kind::File, Some(_)) => {
+                let text = |b: &Option<Vec<u8>>| std::str::from_utf8(b.as_deref().unwrap_or(b"")).map(str::to_string).ok();
+                match (text(&self.old), text(&self.new)) {
+                    (Some(old), Some(new)) => TextDiff::from_lines(&old, &new).unified_diff().context_radius(2).to_string(),
+                    _ => "(binaire)".into(),
+                }
+            }
         }
     }
 }
@@ -80,9 +99,9 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
         }
     }
     for (i, ch) in batch.changes.iter().enumerate() {
-        if let Err(e) = put(ctx, &ch.rel, ch.new.as_deref(), ch.dir) {
+        if let Err(e) = put(ctx, &ch.rel, ch.new.as_deref(), &ch.kind) {
             for done in batch.changes[..i].iter().rev() {
-                let _ = put(ctx, &done.rel, done.old.as_deref(), done.dir);
+                let _ = put(ctx, &done.rel, done.old.as_deref(), &done.kind);
             }
             return Err(e);
         }
@@ -91,7 +110,7 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
         if let Some(turn) = ctx.undo.last_mut()
             && !turn.iter().any(|s| s.rel == ch.rel)
         {
-            turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old, dir: ch.dir });
+            turn.push(Snapshot { rel: ch.rel.clone(), old: ch.old, kind: ch.kind });
         }
         match ch.new {
             Some(new) if batch.known => {
@@ -110,20 +129,22 @@ fn current(ctx: &Ctx, ch: &Change) -> Result<Option<Vec<u8>>, String> {
     if !ctx.ws.dir.try_exists(&ch.rel).map_err(|e| file::io_err(&shown, e))? {
         return Ok(None);
     }
-    if ch.dir {
+    if ch.kind != Kind::File {
         let is_dir = ctx.ws.dir.symlink_metadata(&ch.rel).is_ok_and(|m| m.is_dir());
         return if is_dir { Ok(Some(vec![])) } else { Err(format!("{shown}: not a directory")) };
     }
     file::read_bytes(ctx, &ch.rel, &shown).map(Some)
 }
 
-fn put(ctx: &Ctx, rel: &std::path::Path, data: Option<&[u8]>, dir: bool) -> Result<(), String> {
-    match (data, dir) {
-        (Some(_), true) => ctx.ws.dir.create_dir_all(rel),
+fn put(ctx: &Ctx, rel: &Path, data: Option<&[u8]>, kind: &Kind) -> Result<(), String> {
+    match (data, kind) {
+        (Some(_), Kind::Tree { slot, .. }) => ctx.ws.dir.rename(slot, &ctx.ws.dir, rel),
+        (None, Kind::Tree { slot, .. }) => trash::park(&ctx.ws.dir, rel, slot),
+        (Some(_), Kind::Dir) => ctx.ws.dir.create_dir_all(rel),
         // Fails unless empty: the last guard against deleting contents.
-        (None, true) => ctx.ws.dir.remove_dir(rel),
-        (Some(d), false) => file::write_atomic(&ctx.ws.dir, rel, d),
-        (None, false) => ctx.ws.dir.remove_file(rel),
+        (None, Kind::Dir) => ctx.ws.dir.remove_dir(rel),
+        (Some(d), Kind::File) => file::write_atomic(&ctx.ws.dir, rel, d),
+        (None, Kind::File) => ctx.ws.dir.remove_file(rel),
     }
     .map_err(|e| file::io_err(&rel.display().to_string(), e))
 }
@@ -135,7 +156,12 @@ pub fn begin_turn(ctx: &mut Ctx) {
     }
     ctx.undo.push(vec![]);
     if ctx.undo.len() > MAX_TURNS {
-        ctx.undo.remove(0);
+        // Beyond undo reach: parked directories are deleted for real.
+        for s in ctx.undo.remove(0) {
+            if let Kind::Tree { slot, .. } = s.kind {
+                let _ = ctx.ws.dir.remove_dir_all(slot);
+            }
+        }
     }
 }
 
@@ -147,7 +173,7 @@ pub fn undo(ctx: &mut Ctx) -> Result<Vec<PathBuf>, String> {
     let Some(turn) = ctx.undo.pop() else { return Ok(vec![]) };
     let mut restored = vec![];
     for s in turn.into_iter().rev() {
-        put(ctx, &s.rel, s.old.as_deref(), s.dir)?;
+        put(ctx, &s.rel, s.old.as_deref(), &s.kind)?;
         // Forces a re-read: the model's view of this file is now stale.
         ctx.reads.remove(&s.rel);
         restored.push(s.rel);
@@ -194,9 +220,9 @@ mod tests {
         let mut c = ctx("rollback", &[("a.txt", "a")]);
         let batch = Batch {
             changes: vec![
-                Change { rel: "b.txt".into(), old: None, new: Some(b"b".to_vec()), dir: false },
+                Change { rel: "b.txt".into(), old: None, new: Some(b"b".to_vec()), kind: Kind::File },
                 // Removing a missing file fails after b.txt was written.
-                Change { rel: "missing/x.txt".into(), old: None, new: None, dir: false },
+                Change { rel: "missing/x.txt".into(), old: None, new: None, kind: Kind::File },
             ],
             ok: "ok".into(),
             known: true,

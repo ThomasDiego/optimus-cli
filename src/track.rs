@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use crate::sandbox::Workspace;
 
 /// Build output dirs: huge and never worth reporting.
-const SKIP: &[&str] = &["target", "node_modules"];
+const SKIP: &[&str] = &["target", "node_modules", crate::sandbox::TRASH];
 const MAX_LISTED: usize = 20;
 
 pub type Snapshot = HashMap<PathBuf, (u64, SystemTime)>;
