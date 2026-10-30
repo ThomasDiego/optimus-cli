@@ -18,15 +18,8 @@ const DENIED_SUBCOMMANDS: &[(&str, &[&str])] = &[
     ("pnpm", &["publish", "login", "logout", "exec", "dlx"]),
     ("yarn", &["publish", "login", "logout", "npm", "dlx"]),
     ("bun", &["publish", "x"]),
-    ("deno", &["publish", "install", "eval"]),
+    ("deno", &["publish", "install"]),
     ("go", &["install"]),
-];
-
-/// Inline code bypasses the reviewable write_file step.
-const INLINE_CODE_FLAGS: &[(&str, &[&str])] = &[
-    ("python3", &["-c"]),
-    ("node", &["-e", "--eval", "-p", "--print"]),
-    ("bun", &["-e", "--eval"]),
 ];
 
 /// Shell habits and the tool that does the job: a direct pointer saves the
@@ -41,7 +34,7 @@ const SHELL_TOOLS: &[(&str, &str)] = &[
     ("mv", "move_file"),
     ("cp touch mkdir echo tee", "write_file (parent dirs are created)"),
     ("sed perl", "edit_file, or replace for many files"),
-    ("awk jq", "a python3 or node script file for computations"),
+    ("awk jq bc", "python3 -c or node -e for computations"),
     ("curl wget", "web_fetch (reads pages only; nothing can be sent)"),
     ("git", "git"),
     ("kill pkill ps", "process for background jobs; anything a finished run started is already killed"),
@@ -67,10 +60,6 @@ fn denied(cmd: &str, args: &[String]) -> Option<String> {
     let sub = args.iter().find(|a| !a.starts_with('-') && !a.starts_with('+'));
     if let Some(sub) = sub.filter(|s| lookup(DENIED_SUBCOMMANDS).contains(&s.as_str())) {
         return Some(format!("{cmd} {sub} is not allowed (publishing, credentials or remote code)"));
-    }
-    let inline = lookup(INLINE_CODE_FLAGS);
-    if args.iter().any(|a| inline.iter().any(|f| a == f || (f.len() == 2 && a.starts_with(f)))) {
-        return Some("inline code is not allowed".into());
     }
     None
 }
@@ -153,18 +142,17 @@ mod tests {
     }
 
     #[test]
-    fn refuses_dangerous_subcommands_and_inline_code() {
+    fn refuses_dangerous_subcommands_only() {
         let mut c = ctx("run-deny", &[]);
         c.run_allow = ["cargo", "npm", "python3", "node"].map(String::from).to_vec();
         let run = |c: &mut crate::tools::Ctx, cmd: &str, args: &[&str]| call(c, "run", json!({"cmd": cmd, "args": args}));
         assert!(run(&mut c, "cargo", &["publish"]).unwrap_err().contains("cargo publish is not allowed"));
         assert!(run(&mut c, "cargo", &["+nightly", "install", "x"]).is_err());
         assert!(run(&mut c, "npm", &["exec", "evil"]).is_err());
-        assert!(run(&mut c, "python3", &["-c", "print(1)"]).unwrap_err().contains("inline code"));
-        assert!(run(&mut c, "python3", &["-cprint(1)"]).is_err());
-        assert!(run(&mut c, "node", &["--eval", "1"]).is_err());
+        // Inline code is fine: the sandbox, not the flag, is the boundary.
+        assert!(run(&mut c, "python3", &["-c", "print(1)"]).is_ok());
+        assert!(run(&mut c, "node", &["-e", "1"]).is_ok());
         assert!(run(&mut c, "cargo", &["test", "--", "--nocapture"]).is_ok());
-        assert!(run(&mut c, "python3", &["script.py", "-c", "conf"]).is_err(), "conservative on -c anywhere");
         assert!(run(&mut c, "npm", &["run", "build"]).is_ok());
     }
 }

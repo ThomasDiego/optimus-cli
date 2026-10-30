@@ -52,6 +52,7 @@ bigcsv|grep -qE '90.{0,3}000' "$ANSWER" && grep -qE '20.{0,3}000' "$ANSWER"|Comb
 # Long-running programs.
 longjob|grep -q 'TOTAL=42' "$ANSWER"|Lance python3 scripts/count.py (c'est long), suis son avancée et donne-moi la ligne finale exacte.
 server|grep -q 'http://127.0.0.1:' "$ANSWER"|Lance node server.js en arrière-plan et donne-moi son URL.
+serverhit|grep -q hello-from-server "$ANSWER"|Lance node server.js en arrière-plan, vérifie qu'il répond et donne-moi exactement ce qu'il renvoie.
 forever|grep -qi watching "$ANSWER"|Lance python3 watch.py et dis-moi ce qu'il affiche.
 spam|grep -q 'line 50000' "$ANSWER"|Lance python3 spam.py et donne-moi sa dernière ligne.
 # Other stacks and larger jobs.

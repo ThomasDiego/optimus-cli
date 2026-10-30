@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::exec::Review;
-use crate::{exec, track, web};
+use crate::{exec, local, track, web};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
 use crate::provider::{Delta, Provider, Request};
@@ -142,6 +142,8 @@ impl<P: Provider> Agent<P> {
                 web::fetch(&f).await
             }
             Outcome::Wait { id, secs } => ctx.jobs.wait(id, secs).await,
+            // Loopback to the agent's own server: nothing leaves the machine, no approval.
+            Outcome::Local { port, path } => local::get(port, &path).await,
         }
     }
 
