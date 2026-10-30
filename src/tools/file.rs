@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cap_std::fs::Dir;
 
@@ -64,13 +64,35 @@ pub fn read_text(ctx: &Ctx, rel: &Path, shown: &str) -> Result<String, String> {
     Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
 }
 
-/// Edits require the model to have seen the current content.
-pub fn ensure_fresh(ctx: &Ctx, rel: &Path, current: &str, shown: &str) -> Result<(), String> {
-    match ctx.reads.get(rel) {
-        None => Err(format!("{shown}: read the file before modifying it")),
-        Some(s) if s.hash != hash(current.as_bytes()) => Err(format!("{shown}: changed since last read, read it again")),
-        Some(_) => Ok(()),
+/// Edits require the model to have seen the current content. When it has
+/// not, the refusal carries that content (and records it as read), so the
+/// model can retry at once instead of spending a round trip on read_file.
+pub fn ensure_fresh(ctx: &mut Ctx, rel: &Path, current: &str, shown: &str) -> Result<(), String> {
+    let why = match ctx.reads.get(rel) {
+        None => "not read yet",
+        Some(s) if s.hash != hash(current.as_bytes()) => "changed since your last read, not by you",
+        Some(_) => return Ok(()),
+    };
+    match super::read::read_one(ctx, shown, None, None) {
+        Ok(view) => Err(format!("{shown}: {why}; retry against its current content:\n{view}")),
+        Err(_) => Err(format!("{shown}: {why}, read it first")),
     }
+}
+
+/// Files the model read that changed or vanished since, then forgotten so
+/// each change is reported once.
+pub fn stale(ctx: &mut Ctx) -> Vec<String> {
+    let mut gone: Vec<PathBuf> = ctx
+        .reads
+        .iter()
+        .filter(|(rel, s)| read_text(ctx, rel, "").map(|t| hash(t.as_bytes())).ok() != Some(s.hash))
+        .map(|(rel, _)| rel.clone())
+        .collect();
+    gone.sort();
+    gone.iter().map(|rel| {
+        ctx.reads.remove(rel);
+        rel.display().to_string()
+    }).collect()
 }
 
 pub fn write_atomic(dir: &Dir, rel: &Path, data: &[u8]) -> io::Result<()> {

@@ -64,7 +64,7 @@ impl Tool for Delete {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "delete_file",
-            description: "Delete files, or directories holding no files. All or nothing; undoable by the user.",
+            description: "Delete files, or directories holding no files (empty subdirs go too). All or nothing; undoable by the user.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -142,7 +142,7 @@ mod tests {
         assert!(!root.join("src/a.rs").exists() && root.join("src/sub/b.rs").exists() && !root.join("img.png").exists());
         // Moved content is not "known": editing requires a read first.
         let edit = json!({"path": "src/sub/b.rs", "edits": [{"old": "a", "new": "b"}]});
-        assert!(call(&mut c, "edit_file", edit).unwrap_err().contains("read the file"));
+        assert!(call(&mut c, "edit_file", edit).unwrap_err().contains("not read yet"));
 
         change::begin_turn(&mut c);
         change::undo(&mut c).unwrap();

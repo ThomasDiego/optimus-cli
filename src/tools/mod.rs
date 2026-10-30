@@ -23,6 +23,8 @@ use crate::sandbox::Workspace;
 use crate::web::Fetch;
 
 pub use change::Batch;
+pub use file::stale;
+pub use list_dir::tree;
 pub use file::truncate;
 
 /// What the model has seen of a file: guards edits and dedups re-reads.

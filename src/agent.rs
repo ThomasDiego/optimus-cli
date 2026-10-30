@@ -9,7 +9,7 @@ use crate::{exec, track, web};
 use crate::message::{Message, ToolCall, ToolDef, Usage};
 use crate::permission::{Kind, Mode};
 use crate::provider::{Provider, Request};
-use crate::tools::{Ctx, Outcome, Tool, change};
+use crate::tools::{self, Ctx, Outcome, Tool, change};
 use crate::ui::{Approval, Event};
 
 /// Static on purpose: any dynamic content here would break prompt caching.
@@ -18,7 +18,9 @@ There is no shell: use the tools; run starts allowed programs directly. \
 Paths are relative to the project root; nothing outside it is reachable. \
 Read a file before editing it. Prefer edit_file and batch edits in one call. \
 Call independent tools together in one reply; read_file takes paths to read several files at once. \
-Verify changes by building or testing when possible. Be concise.";
+Do exactly what was asked: no extra files, features, docs or refactors unless requested. \
+Tool results are authoritative: never re-read, re-list or re-run just to confirm a success. \
+Verify changes by building or testing when possible. Reply in the user's language. Be concise.";
 
 /// Hard stop against runaway tool loops.
 const MAX_STEPS: usize = 50;
@@ -47,11 +49,17 @@ impl<P: Provider> Agent<P> {
     /// Runs one user turn until the model answers without tool calls.
     pub async fn turn(&mut self, input: String, ctx: &mut Ctx) -> Result<Usage> {
         change::begin_turn(ctx);
-        let input = match self.note.take() {
-            Some(note) => format!("{note}\n\n{input}"),
-            None => input,
-        };
-        self.messages.push(Message::User(input));
+        let mut notes: Vec<String> = self.note.take().into_iter().collect();
+        // Saves the usual list_dir/glob round trips that open every task.
+        if self.messages.is_empty() {
+            notes.push(format!("[Project files, depth 2]\n{}", tools::tree(ctx, &ctx.ws.root, 2)));
+        }
+        let stale = tools::stale(ctx);
+        if !stale.is_empty() {
+            notes.push(format!("[Changed since you read them, re-read before editing: {}]", stale.join(", ")));
+        }
+        notes.push(input);
+        self.messages.push(Message::User(notes.join("\n\n")));
         let mut usage = Usage::default();
         for _ in 0..MAX_STEPS {
             let req = Request { system: SYSTEM, messages: &self.messages, tools: &self.defs };

@@ -61,7 +61,7 @@ impl Tool for Read {
     }
 }
 
-fn read_one(ctx: &mut Ctx, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String, String> {
+pub(super) fn read_one(ctx: &mut Ctx, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String, String> {
     let rel = ctx.ws.rel(path)?;
     let text = file::read_text(ctx, &rel, path)?;
     let lines: Vec<&str> = text.lines().collect();
