@@ -7,7 +7,7 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContex
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, Outcome, Tool, file, parse};
+use super::{Ctx, FileState, Outcome, Tool, file, parse};
 use crate::message::ToolDef;
 use crate::sandbox::is_secret;
 
@@ -143,6 +143,7 @@ impl Tool for Grep {
                     let mut lines = vec![];
                     let _ = searcher.search_path(&matcher, path, Lines { out: &mut lines });
                     if !lines.is_empty() {
+                        seen(ctx, path);
                         out.push(shown);
                         out.append(&mut lines);
                     }
@@ -155,6 +156,18 @@ impl Tool for Grep {
             }
         }
         Ok(Outcome::Done(if out.is_empty() { "no match".into() } else { out.join("\n") }))
+    }
+}
+
+/// Matched lines count as seen: edits on them need no read_file first, while
+/// a later outside change is still caught by the hash.
+fn seen(ctx: &mut Ctx, path: &std::path::Path) {
+    let Ok(rel) = path.strip_prefix(&ctx.ws.root).map(std::path::Path::to_path_buf) else { return };
+    if ctx.reads.contains_key(&rel) {
+        return;
+    }
+    if let Ok(text) = file::read_text(ctx, &rel, "") {
+        ctx.reads.insert(rel, FileState { hash: file::hash(text.as_bytes()), ranges: vec![] });
     }
 }
 
@@ -179,5 +192,14 @@ mod tests {
         let mut c = ctx("grep-ctx", &[("f.txt", body)]);
         let out = call(&mut c, "grep", json!({"pattern": "TARGET", "mode": "content", "context": 1})).unwrap();
         assert_eq!(out, "f.txt\n2-b\n3:TARGET\n4-c\n--\n8-g\n9:TARGET\n10-h");
+    }
+
+    #[test]
+    fn matched_files_can_be_edited_without_a_read() {
+        let mut c = ctx("grep-seen", &[("a.rs", "old()\n"), ("b.rs", "old()\n")]);
+        call(&mut c, "grep", json!({"pattern": "old", "glob": "a.rs", "mode": "content"})).unwrap();
+        let edit = |p: &str| json!({"path": p, "edits": [{"old": "old()", "new": "new()"}]});
+        assert!(call(&mut c, "edit_file", edit("a.rs")).is_ok());
+        assert!(call(&mut c, "edit_file", edit("b.rs")).unwrap_err().contains("not read yet"));
     }
 }

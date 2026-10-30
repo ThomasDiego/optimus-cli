@@ -143,7 +143,15 @@ impl<P: Provider> Agent<P> {
             }
             Outcome::Wait { id, secs } => ctx.jobs.wait(id, secs).await,
             // Loopback to the agent's own server: nothing leaves the machine, no approval.
-            Outcome::Local { port, path } => local::get(port, &path).await,
+            Outcome::Local { port, path } => match local::get(port, &path).await {
+                Err(e) => {
+                    // A request that crashes the server only shows up as a reset.
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    let gone = !ctx.jobs.ports().contains(&port);
+                    Err(if gone { format!("{e}; the server exited (crashed?), process output shows why") } else { e })
+                }
+                ok => ok,
+            },
         }
     }
 
