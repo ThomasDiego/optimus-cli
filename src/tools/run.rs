@@ -92,7 +92,7 @@ impl Tool for Run {
         if let Some((_, tool)) = SHELL_TOOLS.iter().find(|(cmd, _)| cmd.split(' ').any(|c| c == a.cmd)) {
             return Err(format!("no shell commands; use {tool}"));
         }
-        if a.cmd.contains('/') {
+        if a.cmd.contains(['/', '\\']) {
             return Err("programs run by name only; run build outputs through their tool (cargo run, npm run…)".into());
         }
         if !ctx.run_allow.contains(&a.cmd) {

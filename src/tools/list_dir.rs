@@ -88,10 +88,13 @@ mod tests {
         assert_eq!(tree, ".env (secret, unreadable)\n.gitignore\ndebug.log (ignored)\nnode_modules/ (ignored)\nsrc/\n  a/\nz.txt");
 
         // A link leading out is named as such, here and when used.
-        std::os::unix::fs::symlink("/etc/hosts", c.ws.root.join("src/hosts")).unwrap();
-        assert_eq!(call(&mut c, "list_dir", json!({"path": "src", "depth": 1})).unwrap(), "a/\nhosts (link outside project, unreachable)");
-        let err = call(&mut c, "read_file", json!({"path": "src/hosts"})).unwrap_err();
-        assert_eq!(err, "src/hosts: symlink to outside the project, not reachable");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc/hosts", c.ws.root.join("src/hosts")).unwrap();
+            assert_eq!(call(&mut c, "list_dir", json!({"path": "src", "depth": 1})).unwrap(), "a/\nhosts (link outside project, unreachable)");
+            let err = call(&mut c, "read_file", json!({"path": "src/hosts"})).unwrap_err();
+            assert_eq!(err, "src/hosts: symlink to outside the project, not reachable");
+        }
         assert_eq!(call(&mut c, "read_file", json!({"path": "../x"})).unwrap_err(), "../x: outside project");
     }
 }
