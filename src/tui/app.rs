@@ -16,6 +16,7 @@ use crate::command::{self, Suggestion};
 use crate::message::Usage;
 use crate::permission::Mode;
 use crate::agent::DENIED;
+use crate::setup::Setup;
 use crate::tools::truncate;
 use crate::ui::{Approval, Event, brief, stat, summary};
 
@@ -78,6 +79,8 @@ pub struct App {
     pub copy_pending: bool,
     /// Text for the clipboard, taken by the draw loop.
     pub copied: Option<String>,
+    /// Guided configuration in progress: the input answers it.
+    pub setup: Option<Setup>,
 }
 
 fn dim() -> Style {
@@ -114,7 +117,13 @@ impl App {
             held: false,
             copy_pending: false,
             copied: None,
+            setup: None,
         }
+    }
+
+    /// The input is an API key: shown masked, kept out of the history.
+    pub fn secret(&self) -> bool {
+        self.setup.as_ref().is_some_and(Setup::secret)
     }
 
     /// Wheel scrolls; dragging with the left button selects, and releasing
@@ -268,7 +277,7 @@ impl App {
 
     /// Visible `/command` completions for the current input.
     pub fn suggestions(&self) -> Vec<Suggestion> {
-        if self.busy || self.approval.is_some() { vec![] } else { command::suggest(&self.input) }
+        if self.busy || self.approval.is_some() || self.setup.is_some() { vec![] } else { command::suggest(&self.input) }
     }
 
     fn submit(&mut self) -> Action {
@@ -276,7 +285,9 @@ impl App {
         self.cursor = 0;
         self.browsing = None;
         self.selected = 0;
-        self.history.push(text.clone());
+        if !self.secret() && !text.trim().is_empty() {
+            self.history.push(text.clone());
+        }
         self.out.follow();
         Action::Submit(text.trim().to_string())
     }
@@ -296,10 +307,12 @@ impl App {
             }
             KeyCode::Char('d') if ctrl && self.input.is_empty() && !self.busy => return Action::Quit,
             KeyCode::Esc if self.busy => return Action::Cancel,
+            KeyCode::Esc if self.setup.as_ref().is_some_and(Setup::closable) => return Action::Cancel,
             KeyCode::BackTab => self.mode.set(self.mode.get().next()),
             KeyCode::Char('j') if ctrl => self.insert("\n"),
             KeyCode::Enter if k.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => self.insert("\n"),
-            KeyCode::Enter if !self.busy && !self.input.trim().is_empty() => return self.submit(),
+            // Setup answers may be empty: Enter keeps the current value.
+            KeyCode::Enter if !self.busy && (self.setup.is_some() || !self.input.trim().is_empty()) => return self.submit(),
             KeyCode::Char('u') if ctrl => self.set_input(String::new()),
             KeyCode::Char('a') if ctrl => self.cursor = 0,
             KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
@@ -464,6 +477,18 @@ impl App {
         self.md.reset();
         self.context = 0;
         self.stat = None;
+    }
+
+    /// A setup question: its first line stands out, choices follow.
+    pub fn ask(&mut self, prompt: &str) {
+        self.out.push(Line::default());
+        for (i, l) in prompt.lines().enumerate() {
+            let (gutter, style) = match i {
+                0 => (Span::styled("? ", Style::new().fg(ACCENT)), Style::new().add_modifier(Modifier::BOLD)),
+                _ => (Span::raw(INDENT), Style::new()),
+            };
+            self.out.push_in(gutter, Line::styled(l.to_string(), style));
+        }
     }
 
     pub fn say(&mut self, msg: &str, error: bool) {

@@ -3,6 +3,7 @@ mod clipboard;
 mod input;
 mod markdown;
 mod select;
+mod setup;
 mod transcript;
 mod view;
 
@@ -22,12 +23,22 @@ use tokio::time::MissedTickBehavior;
 use self::app::{Action, App};
 use crate::agent::Agent;
 use crate::command::{self, Action as Cmd};
-use crate::provider::Provider;
+use crate::config::{self, Config};
+use crate::provider::OpenAiCompat;
+use crate::setup::Setup;
 use crate::tools::Ctx;
 use crate::ui::Event;
 
 /// ~30 fps, only while a turn runs; idle means zero wakeups.
 const FRAME: Duration = Duration::from_millis(33);
+
+/// What the session starts from.
+pub struct Start {
+    pub cfg: Config,
+    /// Why the config cannot run yet: the setup opens first.
+    pub problem: Option<String>,
+    pub notice: Option<String>,
+}
 /// Mouse buttons, wheel and motion while a button is held (SGR encoding):
 /// unlike full capture, a pointer that is only moving produces no events.
 /// Dragging selects text, since capturing the mouse disables the terminal's own.
@@ -40,11 +51,11 @@ pub enum Error {
     Session(anyhow::Error),
 }
 
-pub async fn run<P: Provider>(
-    agent: &mut Agent<P>,
+pub async fn run(
+    agent: &mut Agent<OpenAiCompat>,
     ctx: &mut Ctx,
     events: &mut mpsc::UnboundedReceiver<Event>,
-    model: String,
+    start: Start,
 ) -> Result<(), Error> {
     // Alternate screen: the UI owns the whole terminal, like 100dvh × 100%.
     let mut term = match ratatui::try_init() {
@@ -59,22 +70,32 @@ pub async fn run<P: Provider>(
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES;
     let _ = execute!(stdout(), EnableBracketedPaste, PushKeyboardEnhancementFlags(flags));
     let _ = write!(stdout(), "{MOUSE_ON}").and_then(|_| stdout().flush());
-    let result = session(&mut term, agent, ctx, events, model).await;
+    let result = session(&mut term, agent, ctx, events, start).await;
     let _ = write!(stdout(), "{MOUSE_OFF}");
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags, DisableBracketedPaste);
     ratatui::try_restore().map_err(|e| Error::Session(e.into()))?;
     result.map_err(Error::Session)
 }
 
-async fn session<P: Provider>(
+async fn session(
     term: &mut DefaultTerminal,
-    agent: &mut Agent<P>,
+    agent: &mut Agent<OpenAiCompat>,
     ctx: &mut Ctx,
     events: &mut mpsc::UnboundedReceiver<Event>,
-    model: String,
+    start: Start,
 ) -> Result<()> {
+    let Start { mut cfg, problem, notice } = start;
+    let model = cfg.active().map(|p| p.model.clone()).unwrap_or_default();
     let mut app = App::new(model, agent.mode.clone());
     let mut keys = term_events();
+    if let Some(n) = notice {
+        app.say(&n, true);
+    }
+    if let Some(why) = problem {
+        app.say("Welcome to ai. Let's connect a model provider; /config changes it later.", false);
+        app.say(&why, false);
+        setup::open(&mut app, Setup::first_run(config::dir(), cfg.clone()));
+    }
     loop {
         app.jobs = ctx.jobs.running();
         draw(term, &mut app)?;
@@ -90,10 +111,29 @@ async fn session<P: Provider>(
         let input = match app.on_term(ev) {
             Action::Submit(s) => s,
             Action::Quit => return Ok(()),
+            Action::Cancel if app.setup.as_ref().is_some_and(Setup::closable) => {
+                app.setup = None;
+                app.say("config unchanged", false);
+                continue;
+            }
             Action::None | Action::Cancel => continue,
         };
+        if app.setup.is_some() {
+            if !input.is_empty() {
+                // An API key never appears on screen.
+                app.echo(if app.secret() { "••••••••" } else { &input });
+            }
+            if setup::feed(term, &mut app, agent, ctx, &mut keys, &mut cfg, &input).await? {
+                return Ok(());
+            }
+            continue;
+        }
         app.echo(&input);
         match command::handle(&input, agent, ctx) {
+            Some(Cmd::Config) => {
+                setup::open(&mut app, Setup::menu(config::dir(), cfg.clone()));
+                continue;
+            }
             Some(Cmd::Exit) => return Ok(()),
             Some(Cmd::Clear) => {
                 app.clear();
@@ -164,7 +204,7 @@ async fn session<P: Provider>(
 }
 
 /// Ratatui diffs against the previous frame: only changed cells are written.
-fn draw(term: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
+pub(super) fn draw(term: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     term.draw(|f| view::render(f, app))?;
     if let Some(text) = app.copied.take().filter(|t| !t.is_empty()) {
         clipboard::copy(&text);

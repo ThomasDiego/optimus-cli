@@ -61,23 +61,14 @@ cargo install --path . --locked
 
 ## Quick start
 
-macOS and Linux:
-
 ```sh
-export OPENROUTER_API_KEY=sk-or-...
 cd my-project
 ai
 ```
 
-Windows (PowerShell):
+The first run asks for a provider (OpenRouter, OpenAI, DeepSeek or any OpenAI-compatible API such as Ollama), an API key and a model. It saves them only once a real request proves that the key works with that model. Change any of them later with `/config`, without leaving `ai`.
 
-```powershell
-$env:OPENROUTER_API_KEY = "sk-or-..."
-cd my-project
-ai
-```
-
-With no config file, `ai` uses OpenRouter with `deepseek/deepseek-v4.1-flash-1017`, routed to DeepSeek only.
+The default is OpenRouter with `deepseek/deepseek-v4.1-flash-1017`, routed to DeepSeek only.
 
 ## Usage
 
@@ -121,6 +112,7 @@ Switch modes with `Shift+Tab` or `/mode`.
 | `/undo` | Revert the last changes |
 | `/mode [ask\|edit\|auto]` | Set the mode, or cycle to the next one |
 | `/clear` | Clear the conversation |
+| `/config` | Change the provider, key, model or allowed programs |
 | `/exit` | Quit |
 
 Type `/` to get suggestions; `Tab` accepts one.
@@ -164,7 +156,9 @@ The model has 14 tools. None of them writes or executes anything itself: each re
 
 ## Configuration
 
-`ai` reads `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config.toml`, or `%APPDATA%\ai\config.toml` on Windows). Keys are never stored in it, only the name of the environment variable that holds them.
+Use `/config` inside `ai`: it shows the current settings and changes one at a time. A new key or model is saved only after a test request succeeds. Wrong keys send you back to the key and unknown models back to the model, with the provider's own error.
+
+Settings live in `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config.toml`, or `%APPDATA%\ai\config.toml` on Windows). Keys are never stored in it. A key typed in `/config` goes to the `.env` file next to it, readable by you only. Being a `.env` file, it is refused to the model by the file tools, the sandbox and git, like any secret. When that file has no key, `ai` falls back to the environment variable named by `key_env`.
 
 ```toml
 provider = "openrouter"
@@ -182,9 +176,15 @@ only = ["deepseek"]          # OpenRouter: these upstream providers only, no fal
 
 Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point `provider` at it. On Windows, Python is usually `python` or `py`: add it to `run_allow`.
 
+The config is checked at startup:
+- `base_url` must use HTTPS, except for a local server, so the key never travels in clear.
+- `key_env` must be a variable name.
+- `run_allow` keeps bare program names only and never a shell.
+- A file that no longer parses opens the setup, and the old file is kept as `config.toml.bak`.
+
 | Variable | Use |
 | --- | --- |
-| `OPENROUTER_API_KEY` (or your `key_env`) | Provider API key, required |
+| `OPENROUTER_API_KEY` (or your `key_env`) | Provider API key, when none was saved with `/config` |
 | `JINA_API_KEY` | Optional, sent to Jina Reader by `web_fetch` |
 | `XDG_CONFIG_HOME` | Config location |
 
@@ -213,6 +213,7 @@ File tools, approvals, secret filtering in file tools and git, the cleared envir
 | Network without approval | denied | TCP and UDP denied | allowed |
 | Local sockets and pipes (Docker, agents) | denied | denied | allowed |
 | Project secret files, `.git`, `.ai-trash` | denied | readable and writable | readable and writable |
+| Saved API key (`~/.config/ai/.env`) | denied | denied | readable |
 | Servers reachable from the LAN | no | if they bind `0.0.0.0` | if they bind `0.0.0.0` |
 | Process tree killed, CPU limit, no terminal | yes | yes | yes (job object) |
 
@@ -249,7 +250,9 @@ Tasks are defined in `eval/tasks.txt` as `name|check|prompt`, with optional setu
 src/
 ├── main.rs            entry point: config, provider, UI selection
 ├── cli.rs             argument parsing
-├── config.rs          config file and defaults
+├── config.rs          config file, defaults and validation
+├── keys.rs            API keys saved by /config
+├── setup/             first-run setup and /config, with the key and model check
 ├── agent.rs           system prompt, tool loop, approvals
 ├── permission.rs      ask / edit / auto
 ├── sandbox.rs         workspace capability handle, secret rules

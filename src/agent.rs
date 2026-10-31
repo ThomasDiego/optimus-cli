@@ -50,6 +50,11 @@ impl<P: Provider> Agent<P> {
         Self { provider, tools, defs, messages: vec![], events, mode: Rc::new(Cell::new(mode)), note: None }
     }
 
+    /// After /config: the conversation goes on with the new provider.
+    pub fn set_provider(&mut self, provider: P) {
+        self.provider = provider;
+    }
+
     /// Runs one user turn until the model answers without tool calls.
     pub async fn turn(&mut self, input: String, ctx: &mut Ctx) -> Result<Usage> {
         change::begin_turn(ctx);
