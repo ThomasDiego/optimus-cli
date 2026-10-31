@@ -189,7 +189,7 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-Some tests need a terminal; run them under `script -q /dev/null cargo test`. CI runs clippy and the tests on macOS, Linux and Windows.
+Some tests need a terminal; run them under `script -q /dev/null cargo test`.
 
 ### Evaluation suite
 
