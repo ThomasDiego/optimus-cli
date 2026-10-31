@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::message::{Message, Reply, ToolDef};
 
-pub use openai_compat::OpenAiCompat;
+pub use openai_compat::{CheckError, OpenAiCompat};
 
 pub struct Request<'a> {
     pub system: &'a str,

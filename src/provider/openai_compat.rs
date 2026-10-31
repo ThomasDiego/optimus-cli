@@ -47,6 +47,36 @@ impl OpenAiCompat {
         }
         body
     }
+
+    /// One tiny request shaped like the real ones: proves the key, the model
+    /// and the routing work together. `status` is 0 when nothing answered.
+    pub async fn check(&self) -> Result<(), CheckError> {
+        let mut body = json!({"model": self.model, "messages": [{"role": "user", "content": "Reply with OK."}]});
+        if !self.only.is_empty() {
+            body["provider"] = json!({"only": self.only, "allow_fallbacks": false});
+        }
+        let send = self.http.post(&self.url).bearer_auth(&self.key).header("content-type", "application/json").body(body.to_string()).send();
+        let res = match tokio::time::timeout(CHECK_TIMEOUT, send).await {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => return Err(CheckError { status: 0, message: format!("no answer from {}: {}", self.url, e.without_url()) }),
+            Err(_) => return Err(CheckError { status: 0, message: format!("no answer from {} within 60s", self.url) }),
+        };
+        let status = res.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = res.text().await.unwrap_or_default();
+        let reason = serde_json::from_str::<Value>(&text).ok().and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(String::from));
+        let reason = reason.unwrap_or_else(|| text.chars().take(200).collect());
+        Err(CheckError { status: status.as_u16(), message: format!("{status}: {}", reason.trim().trim_end_matches('.')) })
+    }
+}
+
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+pub struct CheckError {
+    pub status: u16,
+    pub message: String,
 }
 
 impl Provider for OpenAiCompat {

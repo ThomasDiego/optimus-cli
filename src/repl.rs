@@ -42,6 +42,10 @@ pub async fn run<P: Provider>(
                 println!("{DIM}{s}{RESET}");
                 continue;
             }
+            Some(Action::Config) => {
+                println!("{DIM}/config needs the full-screen UI{RESET}");
+                continue;
+            }
             None => {}
         }
         let result = {

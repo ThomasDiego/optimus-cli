@@ -8,12 +8,15 @@ pub enum Action {
     Say(String),
     /// The conversation was reset: the UI starts from a blank screen too.
     Clear,
+    /// Open the guided configuration.
+    Config,
 }
 
 const COMMANDS: &[(&str, &str)] = &[
     ("undo", "revert the last changes"),
     ("mode", "ask · edit · auto"),
     ("clear", "clear the conversation"),
+    ("config", "provider, key, model, programs"),
     ("exit", "quit"),
 ];
 
@@ -88,7 +91,8 @@ pub fn handle<P: Provider>(input: &str, agent: &mut Agent<P>, ctx: &mut Ctx) -> 
             ctx.reads.clear();
             Action::Clear
         }
-        _ => Action::Say("/undo  /mode [ask|edit|auto]  /clear  /exit".into()),
+        "config" => Action::Config,
+        _ => Action::Say("/undo  /mode [ask|edit|auto]  /clear  /config  /exit".into()),
     })
 }
 
@@ -114,7 +118,8 @@ mod tests {
 
     #[test]
     fn suggests_commands_and_mode_args() {
-        assert_eq!(names("/"), ["/undo", "/mode", "/clear", "/exit"]);
+        assert_eq!(names("/"), ["/undo", "/mode", "/clear", "/config", "/exit"]);
+        assert_eq!(names("/co"), ["/config"]);
         assert_eq!(names("/cl"), ["/clear"]);
         assert_eq!(names("/e"), ["/exit", "/mode", "/clear"]);
         assert_eq!(names("/mode a"), ["/mode ask", "/mode auto"]);

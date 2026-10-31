@@ -18,7 +18,17 @@ pub const ACCENT: Color = Color::Magenta;
 
 /// Rows the input needs at this terminal width.
 pub fn rows(app: &App, width: u16) -> usize {
-    wrap(&app.input, app.cursor, inner_width(width)).0.len().clamp(1, MAX_ROWS)
+    let (text, cursor) = shown(app);
+    wrap(&text, cursor, inner_width(width)).0.len().clamp(1, MAX_ROWS)
+}
+
+/// The input as drawn, and the cursor in it: an API key shows as dots.
+fn shown(app: &App) -> (String, usize) {
+    if !app.secret() {
+        return (app.input.clone(), app.cursor);
+    }
+    let dot = '•';
+    (dot.to_string().repeat(app.input.chars().count()), app.input[..app.cursor].chars().count() * dot.len_utf8())
 }
 
 fn inner_width(width: u16) -> usize {
@@ -35,7 +45,8 @@ pub fn render_box(f: &mut Frame, app: &App, area: Rect) {
     };
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(border).padding(Padding::horizontal(1));
     let inner = block.inner(area);
-    let (rows, (col, row)) = wrap(&app.input, app.cursor, inner_width(area.width));
+    let (text, cursor) = shown(app);
+    let (rows, (col, row)) = wrap(&text, cursor, inner_width(area.width));
     let top = row.saturating_sub(inner.height.max(1) as usize - 1);
     let text = if app.busy { Style::new().add_modifier(Modifier::DIM) } else { Style::new() };
     let lines: Vec<Line> = rows
