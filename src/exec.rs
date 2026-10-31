@@ -235,8 +235,9 @@ mod tests {
         let out = run(&exec("cmd", &["/c", "set"], &root, 10), &root).await.unwrap();
         assert!(out.starts_with("exit 0") && !out.contains("CARGO_PKG_NAME"), "{out}");
 
-        let spawn = "(Start-Process ping -ArgumentList '-n','30','127.0.0.1' -PassThru -WindowStyle Hidden).Id";
-        let out = run(&exec("powershell", &["-NoProfile", "-Command", spawn], &root, 60), &root).await.unwrap();
+        // The grandchild keeps no handle on our pipes: only the job can end it.
+        let spawn = "import subprocess as s; print(s.Popen(['ping', '-n', '30', '127.0.0.1'], stdout=s.DEVNULL, stderr=s.DEVNULL).pid)";
+        let out = run(&exec("python", &["-c", spawn], &root, 30), &root).await.unwrap();
         let pid: u32 = out.lines().last().unwrap().trim().parse().unwrap_or_else(|_| panic!("{out}"));
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!os::alive(pid), "background child survived");
