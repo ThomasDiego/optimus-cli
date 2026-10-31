@@ -2,12 +2,14 @@
 
 A small, fast coding agent for your terminal, written in Rust.
 
-`ai` works inside the directory you launch it from, and only there. It has no shell: it reads, edits and searches files through its own tools, and starts programs from an allowlist inside an OS sandbox. On macOS that sandbox has no network by default. Data can leave your machine through the network alone, and every network access needs your approval.
+`ai` works inside the directory you launch it from, and only there. It has no shell: it reads, edits and searches files through its own tools, and starts programs from an allowlist inside an OS sandbox with no network by default. Data can leave your machine through the network alone, and every network access needs your approval.
+
+Runs on macOS, Linux and Windows. See [Platforms](#platforms) for how far the sandbox goes on each.
 
 ## Highlights
 
-- **Sandboxed by design.** File tools go through a capability handle on the project directory: no `..`, absolute path or symlink can reach outside it. Programs run under a macOS Seatbelt profile with a cleared environment, resource limits and their own process group.
-- **Secrets never reach the model.** `.env*`, private keys, `.npmrc`, `.netrc`, `.git-credentials` and similar files are blocked for file tools, sandboxed programs and git alike.
+- **Sandboxed by design.** File tools go through a capability handle on the project directory: no `..`, absolute path or symlink can reach outside it. Programs run in a kernel sandbox (Seatbelt on macOS, Landlock and seccomp on Linux) with a cleared environment, resource limits and their own process group.
+- **Secrets never reach the model.** `.env*`, private keys, `.npmrc`, `.netrc`, `.git-credentials` and similar files are blocked for file tools and git everywhere, and for sandboxed programs on macOS.
 - **Three permission modes.** Confirm everything, auto-apply edits, or run fully autonomous. Network access is confirmed in every mode.
 - **Undo.** Every change, including deleted directories, can be reverted with `/undo`.
 - **Full-screen TUI** with streaming markdown, live tool progress, command suggestions, input history and mouse selection copied to the clipboard. It falls back to a line UI on limited terminals.
@@ -25,6 +27,8 @@ cd ai-cli
 cargo build --release
 cp target/release/ai ~/.local/bin/   # or anywhere on your PATH
 ```
+
+On Windows the binary is `target\release\ai.exe`.
 
 ## Quick start
 
@@ -121,7 +125,7 @@ The model has 14 tools. None of them writes or executes anything itself: each re
 
 ## Configuration
 
-`ai` reads `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config.toml`). Keys are never stored in it, only the name of the environment variable that holds them.
+`ai` reads `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config.toml`, or `%APPDATA%\ai\config.toml` on Windows). Keys are never stored in it, only the name of the environment variable that holds them.
 
 ```toml
 provider = "openrouter"
@@ -137,7 +141,7 @@ model = "deepseek/deepseek-v4.1-flash-1017"
 only = ["deepseek"]          # OpenRouter: these upstream providers only, no fallback
 ```
 
-Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point `provider` at it.
+Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point `provider` at it. On Windows, Python is usually `python` or `py`: add it to `run_allow`.
 
 | Variable | Use |
 | --- | --- |
@@ -152,14 +156,30 @@ Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point
 - **No shell, anywhere.** `run` starts programs directly: no pipes, globs, `&&` or redirections.
 - **One reachable directory.** File tools resolve every path through a `cap-std` handle on the launch directory. Nothing outside it can be read or written.
 - **Sandboxed programs (macOS).** `run` wraps programs in a Seatbelt profile (`src/seatbelt.sb`): reads outside the project and toolchains are denied, network and unix sockets are off, and package caches become writable only when you approve network access. The environment is cleared except `PATH`, `HOME`, `USER`, `LANG` and `TMPDIR`. CPU time and file size are limited, and the program runs in its own session, with no controlling terminal and nothing it can inject into yours.
-- **Network is the only way out.** Any network access (`run` with `net`, `web_fetch`) needs interactive approval, in every mode. Without it, `cargo` runs offline from its local cache.
-- **Secrets stay hidden.** Secret files are denied by the file tools, by the Seatbelt profile (which also covers arbitrary `build.rs` code) and are excluded from `git add`.
+- **Network is the only way out** (macOS and Linux). Any network access (`run` with `net`, `web_fetch`) needs interactive approval, in every mode. Without it, `cargo` runs offline from its local cache.
+- **Secrets stay hidden.** Secret files are denied by the file tools, by the Seatbelt profile on macOS (which also covers arbitrary `build.rs` code) and are excluded from `git add`.
 - **Undoable deletions.** Deleted directories are parked in `.ai-trash/` until the session ends, so `/undo` can restore them.
-- **Contained jobs.** Background jobs die with the session, and dev servers accept localhost connections only.
+- **Contained jobs.** Background jobs die with the session, and on macOS dev servers accept localhost connections only.
 - **No workarounds.** When a tool refuses, the model is told to report it, not to try another route.
 
-> [!WARNING]
-> On Linux and other platforms there is no kernel sandbox yet: only the absence of a shell, the program allowlist, the cleared environment and approvals apply. Prefer `ask` or `edit` mode there.
+### Platforms
+
+File tools, approvals, secret filtering in file tools and git, the cleared environment and job cleanup work the same everywhere. What differs is the sandbox around programs started by `run` and `git`.
+
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Sandbox | Seatbelt | Landlock + seccomp | none |
+| Writes outside project and temp | denied | denied | allowed |
+| Reads of `HOME` and outside toolchains | denied | denied | allowed |
+| Network without approval | denied | TCP and UDP denied | allowed |
+| Local sockets and pipes (Docker, agents) | denied | denied | allowed |
+| Project secret files, `.git`, `.ai-trash` | denied | readable and writable | readable and writable |
+| Servers reachable from the LAN | no | if they bind `0.0.0.0` | if they bind `0.0.0.0` |
+| Process tree killed, CPU limit, no terminal | yes | yes | yes (job object) |
+
+**Linux.** Landlock needs kernel 5.13 or later, and 6.7 or later to block TCP. On older kernels seccomp refuses every IP socket until you approve network access. Without Landlock at all, for example on WSL 1, programs run unconfined and each result says so. Landlock can only grant whole directory trees, so it cannot hide files inside the project the way Seatbelt does.
+
+**Windows.** Programs run with your rights. Only the absence of a shell, the allowlist, the cleared environment and approvals protect you, so prefer `ask` or `edit` mode. Programs are looked up in `PATH` only, never in the project. `.cmd` scripts such as `npm` go through `cmd.exe`, with arguments escaped by Rust's standard library.
 
 ## Development
 
@@ -195,6 +215,7 @@ src/
 ├── permission.rs      ask / edit / auto
 ├── sandbox.rs         workspace capability handle, secret rules
 ├── seatbelt.sb        macOS sandbox profile
+├── os/                per-OS sandbox and process control (Seatbelt, Landlock, seccomp, job objects)
 ├── exec.rs            sandboxed process execution
 ├── jobs.rs            background jobs
 ├── web.rs             web fetch through Jina Reader

@@ -25,7 +25,7 @@ pub fn snapshot(ws: &Workspace) -> Option<Snapshot> {
         .take(MAX_FILES + 1)
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            let rel = e.path().strip_prefix(&ws.root).ok()?.to_path_buf();
+            let rel = crate::os::slashes(e.path().strip_prefix(&ws.root).ok()?.to_path_buf());
             Some((rel, (meta.len(), meta.modified().ok()?)))
         })
         .collect();

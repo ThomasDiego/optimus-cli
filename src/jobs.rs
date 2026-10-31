@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
-use crate::exec::{self, Exec, Group};
+use crate::exec::{self, Exec};
+use crate::os::Group;
 use crate::tools::truncate;
 
 const MAX_JOBS: usize = 4;
@@ -93,7 +94,7 @@ impl Jobs {
             seen = total;
         }
         self.list.push(job);
-        Ok(self.output(self.next).expect("just pushed"))
+        Ok(exec::warned(self.output(self.next).expect("just pushed")))
     }
 
     /// Waits up to `secs` for the job to exit, then shows its new output:
@@ -202,6 +203,7 @@ mod tests {
 
     /// `npm start` prints its banner long before the server listens: the
     /// start waits for the URL instead of returning on the banner.
+    #[cfg(unix)]
     #[tokio::test]
     async fn start_waits_past_a_banner_for_the_url() {
         let root = crate::sandbox::tests::temp("jobs-banner").canonicalize().unwrap();
@@ -212,6 +214,7 @@ mod tests {
     }
 
     /// A server that died on a request: its crash output is found by port.
+    #[cfg(unix)]
     #[tokio::test]
     async fn crash_output_is_found_by_port() {
         let root = crate::sandbox::tests::temp("jobs-crash").canonicalize().unwrap();
@@ -225,6 +228,7 @@ mod tests {
         assert!(jobs.output_on(4000).is_none());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn runs_reports_and_kills_on_stop_and_drop() {
         let root = crate::sandbox::tests::temp("jobs").canonicalize().unwrap();

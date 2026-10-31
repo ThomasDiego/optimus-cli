@@ -318,6 +318,7 @@ mod tests {
 
     /// Real git through the sandbox: reads leave `.git` untouched, writes work,
     /// and a planted hook never runs.
+    #[cfg(unix)]
     #[tokio::test]
     async fn runs_sandboxed_without_hooks() {
         let mut c = ctx("git-run", &[("a.rs", "a\n")]);

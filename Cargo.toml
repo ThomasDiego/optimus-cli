@@ -20,6 +20,9 @@ similar = "3.2.1"
 tokio = { version = "1.54.1", features = ["rt", "macros", "process", "time", "sync"] }
 toml = "1.1.8"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -54,7 +54,7 @@ pub fn purge(dir: &Dir, all_dead: bool) {
     let Ok(entries) = dir.read_dir(TRASH) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let dead = || name.parse::<i32>().is_ok_and(|pid| !alive(pid));
+        let dead = || name.parse::<u32>().is_ok_and(|pid| !crate::os::alive(pid));
         if name == me || (all_dead && dead()) {
             let _ = dir.remove_dir_all(Path::new(TRASH).join(&name));
         }
@@ -64,10 +64,4 @@ pub fn purge(dir: &Dir, all_dead: bool) {
     if !others {
         let _ = dir.remove_dir_all(TRASH);
     }
-}
-
-fn alive(pid: i32) -> bool {
-    // Signal 0 only checks existence; EPERM still means it exists.
-    let found = unsafe { libc::kill(pid, 0) == 0 };
-    found || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }

@@ -7,6 +7,7 @@ mod headless;
 mod jobs;
 mod local;
 mod message;
+mod os;
 mod permission;
 mod provider;
 mod repl;

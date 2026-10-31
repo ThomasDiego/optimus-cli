@@ -1,10 +1,10 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
+use crate::os::{self, Group};
 use crate::tools::truncate;
 
 /// Which permission a launch needs, applied by the agent before running it.
@@ -48,27 +48,8 @@ impl Exec {
     }
 }
 
-/// The only variables a child sees: API keys and tokens never leak.
-const KEEP_ENV: &[&str] = &["PATH", "HOME", "USER", "LANG", "TMPDIR"];
 const HEAD: usize = 15;
 const TAIL: usize = 45;
-/// Per-process limits: CPU seconds, largest file written.
-const CPU_SECS: libc::rlim_t = 900;
-const MAX_FILE: libc::rlim_t = 2 << 30;
-
-/// Kernel sandbox, see the profile for the exact rules.
-#[cfg(target_os = "macos")]
-const PROFILE: &str = include_str!("seatbelt.sb");
-
-/// Kills the whole process group, so nothing a command spawned survives it.
-pub struct Group(libc::pid_t);
-
-impl Drop for Group {
-    fn drop(&mut self) {
-        // SAFETY: plain syscall on a group we created; errors (already gone) are ignored.
-        unsafe { libc::killpg(self.0, libc::SIGKILL) };
-    }
-}
 
 /// Runs without a shell, with a cleared environment, resource limits and a timeout.
 pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
@@ -79,68 +60,36 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
         Ok(r) => r.map_err(|e| format!("{}: {e}", ex.program))?,
         Err(_) => return Err(format!("timeout after {}s, process killed", ex.timeout.as_secs())),
     };
-    Ok(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr))
+    Ok(warned(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr)))
+}
+
+/// Prefixes output with the reason commands run unsandboxed, if they do.
+pub fn warned(out: String) -> String {
+    match os::warning() {
+        Some(w) => format!("[{w}]\n{out}"),
+        None => out,
+    }
 }
 
 /// Starts the sandboxed command in its own session, output piped.
 /// Dropping the `Group` kills it and everything it spawned.
 pub fn spawn(ex: &Exec, root: &Path) -> Result<(Child, Group), String> {
-    let mut cmd = command(ex, root);
+    let mut cmd = os::command(ex, root)?;
     cmd.current_dir(&ex.dir)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for k in KEEP_ENV {
+    for k in os::KEEP_ENV {
         if let Some(v) = std::env::var_os(k) {
             cmd.env(k, v);
         }
     }
     cmd.envs(ex.env.iter().copied());
-    // SAFETY: only async-signal-safe setsid/setrlimit calls between fork and exec.
-    unsafe {
-        cmd.pre_exec(|| {
-            // New session, hence new process group and no controlling
-            // terminal: /dev/tty is unreachable, prompts read end-of-input.
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            for (res, v) in [(libc::RLIMIT_CPU, CPU_SECS), (libc::RLIMIT_FSIZE, MAX_FILE), (libc::RLIMIT_CORE, 0)] {
-                libc::setrlimit(res, &libc::rlimit { rlim_cur: v, rlim_max: v });
-            }
-            Ok(())
-        });
-    }
     let child = cmd.spawn().map_err(|e| format!("{}: {e}", ex.program))?;
-    let pid = child.id().ok_or_else(|| format!("{}: exited at once", ex.program))?;
-    Ok((child, Group(pid as libc::pid_t)))
-}
-
-#[cfg(target_os = "macos")]
-fn command(ex: &Exec, root: &Path) -> Command {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/var/empty".into());
-    let tmp = std::env::temp_dir().canonicalize().unwrap_or_else(|_| "/private/tmp".into());
-    // Per-user temp is .../T; its parent also holds the per-user cache (C).
-    let tmp = if tmp.ends_with("T") { tmp.parent().map(Path::to_path_buf).unwrap_or(tmp) } else { tmp };
-    let flag = |on: bool| Path::new(if on { "1" } else { "0" });
-    let mut c = Command::new("/usr/bin/sandbox-exec");
-    let params = [("ROOT", root), ("HOME", home.as_path()), ("TMP", tmp.as_path()), ("NET", flag(ex.net)), ("GIT", flag(ex.git))];
-    for (k, v) in params {
-        let mut def = OsString::from(format!("{k}="));
-        def.push(v);
-        c.arg("-D").arg(def);
-    }
-    c.arg("-p").arg(PROFILE).arg(&ex.program).args(ex.hidden_args).args(&ex.args);
-    c
-}
-
-/// No kernel sandbox yet outside macOS: only no-shell, env clearing and approval apply.
-#[cfg(not(target_os = "macos"))]
-fn command(ex: &Exec, _root: &Path) -> Command {
-    let mut c = Command::new(&ex.program);
-    c.args(ex.hidden_args).args(&ex.args);
-    c
+    let group = Group::attach(&child).map_err(|e| format!("{}: {e}", ex.program))?;
+    Ok((child, group))
 }
 
 fn format_output(code: Option<i32>, took: Duration, stdout: &[u8], stderr: &[u8]) -> String {
@@ -174,6 +123,7 @@ mod tests {
         Exec::new(program.into(), args, dir.into(), Duration::from_secs(secs))
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn background_children_die_with_the_command() {
         let root = crate::sandbox::tests::temp("exec-group").canonicalize().unwrap();
@@ -184,6 +134,7 @@ mod tests {
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "background child survived");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn env_is_cleared_and_output_compact() {
         let root = crate::sandbox::tests::temp("exec-env").canonicalize().unwrap();
@@ -197,6 +148,7 @@ mod tests {
 
     /// Prompts get end-of-input instead of hanging on, or typing into, the
     /// user's terminal.
+    #[cfg(unix)]
     #[tokio::test]
     async fn no_terminal_to_prompt_on() {
         let root = crate::sandbox::tests::temp("exec-tty").canonicalize().unwrap();
@@ -204,6 +156,7 @@ mod tests {
         assert!(out.contains("got=1") && !out.contains("TTY"), "{out}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn timeout_kills() {
         let root = crate::sandbox::tests::temp("exec-timeout").canonicalize().unwrap();
@@ -243,5 +196,53 @@ mod tests {
         let curl = ["-sS", "-m", "5", "-o", "/dev/null", "https://example.com"];
         let offline = run(&exec("/usr/bin/curl", &curl, &root, 10), &root).await.unwrap();
         assert!(!offline.starts_with("exit 0"), "network reachable: {offline}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn landlock_confines_writes_reads_and_sockets() {
+        if os::warning().is_some() && std::env::var_os("CI").is_none() {
+            return eprintln!("skipped: no Landlock on this kernel");
+        }
+        let root = crate::sandbox::tests::temp("exec-ll").canonicalize().unwrap();
+        let inside = root.join("in.txt");
+        let ok = run(&exec("/usr/bin/touch", &[inside.to_str().unwrap()], &root, 5), &root).await.unwrap();
+        assert!(ok.starts_with("exit 0") && inside.exists(), "{ok}");
+
+        let home = os::home().unwrap();
+        let outside = home.join(format!("ai-test-escape-{}", std::process::id()));
+        let denied = run(&exec("/usr/bin/touch", &[outside.to_str().unwrap()], &root, 5), &root).await.unwrap();
+        assert!(!denied.starts_with("exit 0") && !outside.exists(), "{denied}");
+        let home_list = run(&exec("/bin/ls", &[home.to_str().unwrap()], &root, 5), &root).await.unwrap();
+        assert!(!home_list.starts_with("exit 0"), "HOME readable: {home_list}");
+
+        let curl = ["-sS", "-m", "5", "-o", "/dev/null", "https://example.com"];
+        let offline = run(&exec("/usr/bin/curl", &curl, &root, 10), &root).await.unwrap();
+        assert!(!offline.starts_with("exit 0"), "network reachable: {offline}");
+        let py = |code: &str| exec("python3", &["-c", code], &root, 10);
+        for (code, what) in [("socket.socket(socket.AF_UNIX)", "unix socket"), ("socket.socket(type=socket.SOCK_DGRAM)", "UDP")] {
+            let out = run(&py(&format!("import socket; {code}")), &root).await.unwrap();
+            assert!(!out.starts_with("exit 0"), "{what} allowed: {out}");
+        }
+        let listen = run(&py("import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen()"), &root).await.unwrap();
+        assert!(listen.starts_with("exit 0"), "servers cannot listen: {listen}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn job_kills_the_tree_and_env_is_cleared() {
+        let root = os::plain_path(crate::sandbox::tests::temp("exec-win").canonicalize().unwrap());
+        let out = run(&exec("cmd", &["/c", "set"], &root, 10), &root).await.unwrap();
+        assert!(out.starts_with("exit 0") && !out.contains("CARGO_PKG_NAME"), "{out}");
+
+        // The grandchild keeps no handle on our pipes: only the job can end it.
+        let spawn = "import subprocess as s; print(s.Popen(['ping', '-n', '30', '127.0.0.1'], stdout=s.DEVNULL, stderr=s.DEVNULL).pid)";
+        let out = run(&exec("python", &["-c", spawn], &root, 30), &root).await.unwrap();
+        let pid: u32 = out.lines().last().unwrap().trim().parse().unwrap_or_else(|_| panic!("{out}"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!os::alive(pid), "background child survived");
+
+        let err = run(&exec("ping", &["-n", "10", "127.0.0.1"], &root, 1), &root).await.unwrap_err();
+        assert!(err.starts_with("timeout"), "{err}");
     }
 }

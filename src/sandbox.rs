@@ -18,7 +18,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn open(root: PathBuf) -> io::Result<Self> {
-        let root = root.canonicalize()?;
+        let root = crate::os::plain_path(root.canonicalize()?);
         let dir = Dir::open_ambient_dir(&root, ambient_authority())?;
         Ok(Self { dir, root })
     }
@@ -44,6 +44,7 @@ impl Workspace {
         if rel.as_os_str().is_empty() {
             rel.push(".");
         }
+        let rel = crate::os::slashes(rel);
         if is_secret(&rel) || self.real(&rel).is_some_and(|r| is_secret(&r)) {
             return Err(format!("{path}: secret file, access denied"));
         }
@@ -62,7 +63,9 @@ impl Workspace {
         let rel = self.rel(path)?;
         for guarded in [".git", TRASH] {
             let inside = |p: &Path| p.components().any(|c| c.as_os_str() == guarded);
-            let real_inside = self.real(&rel).is_some_and(|r| inside(r.strip_prefix(&self.root).unwrap_or(&r)));
+            // The deepest existing ancestor, canonical: its real case and links.
+            let real = rel.ancestors().find_map(|a| self.real(a));
+            let real_inside = real.is_some_and(|r| inside(r.strip_prefix(&self.root).unwrap_or(&r)));
             if inside(&rel) || real_inside {
                 return Err(format!("{path}: {guarded} is read-only"));
             }
@@ -94,11 +97,11 @@ impl Workspace {
 
     /// Root-relative display path, shortest form for the model.
     pub fn display(&self, abs: &Path) -> String {
-        abs.strip_prefix(&self.root).unwrap_or(abs).to_string_lossy().into_owned()
+        crate::os::slashes(abs.strip_prefix(&self.root).unwrap_or(abs).to_path_buf()).to_string_lossy().into_owned()
     }
 
     fn real(&self, rel: &Path) -> Option<PathBuf> {
-        std::fs::canonicalize(self.root.join(rel)).ok()
+        std::fs::canonicalize(self.root.join(rel)).ok().map(crate::os::plain_path)
     }
 }
 
@@ -125,6 +128,7 @@ pub mod tests {
         p
     }
 
+    #[cfg(unix)]
     #[test]
     fn cannot_escape_root() {
         let base = temp("escape");
@@ -144,6 +148,7 @@ pub mod tests {
         assert!(ws.walk_base(Some("..")).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn secrets_and_git_are_protected() {
         let base = temp("secret");
@@ -159,5 +164,17 @@ pub mod tests {
         assert!(ws.rel("keys.rs").is_ok());
         assert!(ws.rel_write(".git/config").is_err());
         assert!(ws.rel_write("./src/main.rs").is_ok());
+    }
+
+    /// Case-insensitive filesystems (macOS, Windows) open `.GIT` as `.git`.
+    #[test]
+    fn git_guard_ignores_case() {
+        let base = temp("case");
+        std::fs::create_dir_all(base.join(".git/hooks")).unwrap();
+        let ws = Workspace::open(base.clone()).unwrap();
+        if base.join(".GIT").exists() {
+            assert!(ws.rel_write(".GIT/hooks/pre-commit").is_err());
+            assert!(ws.rel_write(".Git/config").is_err());
+        }
     }
 }

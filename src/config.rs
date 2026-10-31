@@ -61,10 +61,7 @@ pub fn load() -> Result<Config> {
 }
 
 fn path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
-    base.join("ai").join("config.toml")
+    crate::os::config_dir().join("ai").join("config.toml")
 }
 
 #[cfg(test)]
