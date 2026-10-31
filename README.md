@@ -19,21 +19,60 @@ Runs on macOS, Linux and Windows. See [Platforms](#platforms) for how far the sa
 
 ## Install
 
-Requires a recent Rust toolchain (edition 2024).
+`ai` builds from source with a recent Rust toolchain (edition 2024) and a C compiler. `cargo install` puts the binary in `~/.cargo/bin`, which rustup adds to your `PATH`.
+
+### macOS
 
 ```sh
+xcode-select --install                                           # C compiler and git
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
 git clone https://github.com/ThomasDiego/ai-cli.git
 cd ai-cli
-cargo build --release
-cp target/release/ai ~/.local/bin/   # or anywhere on your PATH
+cargo install --path . --locked
 ```
 
-On Windows the binary is `target\release\ai.exe`.
+### Linux
+
+```sh
+sudo apt install build-essential git        # Debian, Ubuntu
+# sudo dnf install gcc git                  # Fedora
+# sudo pacman -S base-devel git             # Arch
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+git clone https://github.com/ThomasDiego/ai-cli.git
+cd ai-cli
+cargo install --path . --locked
+```
+
+The sandbox needs Landlock (kernel 5.13 or later, 6.7 or later to block TCP). `cat /sys/kernel/security/lsm` must list `landlock`; without it, `ai` warns in every command result.
+
+### Windows
+
+In PowerShell:
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install Rustlang.Rustup
+winget install Git.Git
+# Open a new terminal so PATH includes cargo and git.
+git clone https://github.com/ThomasDiego/ai-cli.git
+cd ai-cli
+cargo install --path . --locked
+```
 
 ## Quick start
 
+macOS and Linux:
+
 ```sh
 export OPENROUTER_API_KEY=sk-or-...
+cd my-project
+ai
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:OPENROUTER_API_KEY = "sk-or-..."
 cd my-project
 ai
 ```
