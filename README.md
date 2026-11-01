@@ -164,7 +164,7 @@ Settings live in `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config
 provider = "openrouter"
 
 # Programs the `run` tool may start, by bare name.
-run_allow = ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make", "php", "composer"]
+run_allow = ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make", "php", "composer", "laravel"]
 
 [providers.openrouter]
 kind = "openai_compat"
@@ -176,7 +176,7 @@ only = ["deepseek"]          # OpenRouter: these upstream providers only, no fal
 
 Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point `provider` at it. On Windows, Python is usually `python` or `py`: add it to `run_allow`.
 
-A config saved before an update keeps its own `run_allow`: add new programs such as `php` and `composer` through `/config`. On macOS, sandboxed programs cannot read `.env`, so `php artisan` runs without it; Laravel tests read `.env.testing` instead, which is not treated as a secret: keep only test values in it. Composer refuses to run next to a project `auth.json` it cannot read: keep its credentials in Composer's global `auth.json`.
+A config saved before an update keeps its own `run_allow`: add new programs such as `php`, `composer` and `laravel` through `/config`. On macOS, sandboxed programs cannot read `.env`, so `php artisan` runs without it; Laravel tests read `.env.testing` instead, which is not treated as a secret: keep only test values in it. Composer refuses to run next to a project `auth.json` it cannot read: keep its credentials in Composer's global `auth.json`.
 
 The config is checked at startup:
 - `base_url` must use HTTPS, except for a local server, so the key never travels in clear.

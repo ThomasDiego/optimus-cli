@@ -107,7 +107,7 @@ pub fn all() -> Vec<Box<dyn Tool>> {
 
 fn parse<T: DeserializeOwned>(args: &str) -> Result<T, String> {
     let args = if args.trim().is_empty() { "{}" } else { args };
-    serde_json::from_str(args).map_err(|e| format!("invalid arguments: {e}"))
+    serde_json::from_str(args).map_err(|e| format!("invalid arguments: {e}; call the tool again with one JSON object matching its schema"))
 }
 
 /// Joins at most `cap` items, then a `+N more` marker.

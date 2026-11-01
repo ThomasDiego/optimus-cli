@@ -107,7 +107,7 @@ pub fn apply(ctx: &mut Ctx, batch: Batch) -> Result<String, String> {
     for ch in &batch.changes {
         // The user may have edited the file while the approval prompt was open.
         if current(ctx, ch)? != ch.old {
-            return Err(format!("{}: changed before write, read it again", ch.rel.display()));
+            return Err(format!("{}: changed while waiting for approval, nothing was written; read_file it again, then repeat the call", ch.rel.display()));
         }
     }
     for (i, ch) in batch.changes.iter().enumerate() {
@@ -143,7 +143,7 @@ fn current(ctx: &Ctx, ch: &Change) -> Result<Option<Vec<u8>>, String> {
     }
     if ch.kind != Kind::File {
         let is_dir = ctx.ws.dir.symlink_metadata(&ch.rel).is_ok_and(|m| m.is_dir());
-        return if is_dir { Ok(Some(vec![])) } else { Err(format!("{shown}: not a directory")) };
+        return if is_dir { Ok(Some(vec![])) } else { Err(format!("{shown}: is a file, not a directory")) };
     }
     file::read_bytes(ctx, &ch.rel, &shown).map(Some)
 }
@@ -225,7 +225,7 @@ mod tests {
         let change = Change { rel: "a.txt".into(), old: Some(b"one".to_vec()), new: Some(b"two".to_vec()), kind: Kind::File };
         let batch = Batch { changes: vec![change], ok: "ok".into(), known: true };
         std::fs::write(c.ws.root.join("a.txt"), "user edit").unwrap();
-        assert!(apply(&mut c, batch).unwrap_err().contains("changed before write"));
+        assert!(apply(&mut c, batch).unwrap_err().contains("changed while waiting for approval"));
     }
 
     #[test]

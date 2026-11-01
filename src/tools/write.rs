@@ -48,13 +48,13 @@ impl Tool for Write {
         let single = a.path.zip(a.content).map(|(path, content)| File { path, content });
         let files: Vec<File> = single.into_iter().chain(a.files).collect();
         if files.is_empty() || files.len() > MAX_FILES {
-            return Err(format!(r#"expected {{"path", "content"}} or {{"files": [{{"path", "content"}}]}}, at most {MAX_FILES} files"#));
+            return Err(format!(r#"give path and content (one file), or files: [{{"path": "a", "content": "..."}}] with 1 to {MAX_FILES} files"#));
         }
         let (mut changes, mut done) = (vec![], vec![]);
         for f in files {
             let rel = ctx.ws.rel_write(&f.path)?;
             if changes.iter().any(|c: &Change| c.rel == rel) {
-                return Err(format!("{}: given twice", f.path));
+                return Err(format!("{}: given twice in this call; keep one entry per file", f.path));
             }
             let exists = ctx.ws.dir.try_exists(&rel).map_err(|e| file::io_err(&f.path, e))?;
             let old = if exists {

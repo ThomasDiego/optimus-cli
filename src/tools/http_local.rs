@@ -34,11 +34,15 @@ impl Tool for HttpLocal {
         let ports = ctx.jobs.ports();
         if !ports.contains(&a.port) {
             let seen = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(", ");
-            return Err(format!("port {} is not served by a running background job (ports seen: {})", a.port, if seen.is_empty() { "none" } else { &seen }));
+            return Err(format!(
+                "port {} is not served by a running background job (ports seen: {}); start the server with run background=true and use the port it prints",
+                a.port,
+                if seen.is_empty() { "none" } else { &seen }
+            ));
         }
         let path = a.path.unwrap_or_else(|| "/".into());
         if !path.starts_with('/') || path.len() > 1000 || path.contains(char::is_whitespace) {
-            return Err("path must start with / and have no spaces".into());
+            return Err(r#"path must start with / and have no spaces, e.g. "/" or "/api/users""#.into());
         }
         Ok(Outcome::Local { port: a.port, path })
     }

@@ -27,7 +27,7 @@ impl Workspace {
     pub fn rel(&self, path: &str) -> Result<PathBuf, String> {
         let p = Path::new(path);
         let p = if p.is_absolute() {
-            p.strip_prefix(&self.root).map_err(|_| format!("{path}: outside project"))?
+            p.strip_prefix(&self.root).map_err(|_| format!("{path}: outside the project; use a path relative to the project root"))?
         } else {
             p
         };
@@ -36,7 +36,7 @@ impl Workspace {
         let mut rel = PathBuf::new();
         for c in p.components() {
             match c {
-                Component::ParentDir if !rel.pop() => return Err(format!("{path}: outside project")),
+                Component::ParentDir if !rel.pop() => return Err(format!("{path}: outside the project (too many ..); use a path relative to the project root")),
                 Component::Normal(n) => rel.push(n),
                 _ => {}
             }
@@ -46,7 +46,7 @@ impl Workspace {
         }
         let rel = crate::os::slashes(rel);
         if is_secret(&rel) || self.real(&rel).is_some_and(|r| is_secret(&r)) {
-            return Err(format!("{path}: secret file, access denied"));
+            return Err(format!("{path}: secret file, access denied; do not retry or look for another way in, tell the user if you need it"));
         }
         // cap-std would refuse later anyway; a precise reason here saves the
         // model from probing what "permission denied" means.
@@ -67,7 +67,7 @@ impl Workspace {
             let real = rel.ancestors().find_map(|a| self.real(a));
             let real_inside = real.is_some_and(|r| inside(r.strip_prefix(&self.root).unwrap_or(&r)));
             if inside(&rel) || real_inside {
-                return Err(format!("{path}: {guarded} is read-only"));
+                return Err(format!("{path}: {guarded} is read-only for file tools; do not retry{}", if guarded == ".git" { " (use the git tool for repository changes)" } else { "" }));
             }
         }
         Ok(rel)
@@ -77,9 +77,9 @@ impl Workspace {
     pub fn walk_base(&self, path: Option<&str>) -> Result<PathBuf, String> {
         let shown = path.unwrap_or(".");
         let rel = self.rel(shown)?;
-        let abs = self.real(&rel).ok_or_else(|| format!("{shown}: not found"))?;
+        let abs = self.real(&rel).ok_or_else(|| format!("{shown}: directory not found; check the name with list_dir or glob"))?;
         if !abs.starts_with(&self.root) {
-            return Err(format!("{shown}: outside project"));
+            return Err(format!("{shown}: outside the project; use a path relative to the project root"));
         }
         Ok(abs)
     }

@@ -57,12 +57,12 @@ impl Tool for Edit {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         if a.edits.is_empty() {
-            return Err("edits is empty".into());
+            return Err(r#"edits is empty; give at least one {"old": "exact current text", "new": "replacement"}"#.into());
         }
         // Group by file, first-seen order; each file's edits keep their order.
         let mut files: Vec<(String, Vec<&Change>)> = vec![];
         for e in &a.edits {
-            let path = e.path.as_ref().or(a.path.as_ref()).ok_or("each edit needs a path (or set path for all)")?;
+            let path = e.path.as_ref().or(a.path.as_ref()).ok_or("an edit has no file; set path on the call (same file for all edits) or on each edit")?;
             match files.iter_mut().find(|(p, _)| p == path) {
                 Some((_, list)) => list.push(e),
                 None => files.push((path.clone(), vec![e])),
@@ -84,7 +84,7 @@ impl Tool for Edit {
             file::ensure_fresh(ctx, &rel, &current, &path)?;
             let updated = apply(&current, &edits).map_err(tag)?;
             if updated == current {
-                return Err(tag("no change".into()));
+                return Err(tag("no change: old and new are identical, so nothing to edit".into()));
             }
             done.push(if many { format!("{path} {}", summary(&current, &updated)) } else { summary(&current, &updated) });
             changes.push(change::Change { rel, old: Some(current.into_bytes()), new: Some(updated.into_bytes()), kind: Kind::File });
@@ -100,13 +100,17 @@ fn apply(content: &str, edits: &[&Change]) -> Result<String, String> {
         let (old, new) = if crlf { (to_crlf(&e.old), to_crlf(&e.new)) } else { (e.old.clone(), e.new.clone()) };
         let tag = if edits.len() > 1 { format!("edit {}: ", k + 1) } else { String::new() };
         if old.is_empty() {
-            return Err(format!("{tag}old is empty"));
+            return Err(format!("{tag}old is empty; copy the exact text to replace from read_file (to create a file, use write_file)"));
         }
         let hits: Vec<usize> = text.match_indices(&old).map(|(i, _)| i).collect();
         text = match hits.len() {
             0 => match matching::loose_find(&text, &old).as_slice() {
                 [r] => format!("{}{new}{}", &text[..r.start], &text[r.end..]),
-                [] => return Err(format!("{tag}old not found{}", matching::closest(&text, &old))),
+                [] => {
+                    let near = matching::closest(&text, &old);
+                    let hint = if near.is_empty() { "; read_file it again and copy old exactly (indentation included)" } else { &near };
+                    return Err(format!("{tag}old not found in the file{hint}"));
+                }
                 many => return Err(ambiguous(&tag, &text, many.iter().map(|r| r.start))),
             },
             1 => text.replacen(&old, &new, 1),
@@ -119,7 +123,7 @@ fn apply(content: &str, edits: &[&Change]) -> Result<String, String> {
 
 fn ambiguous(tag: &str, text: &str, starts: impl Iterator<Item = usize>) -> String {
     let at: Vec<String> = starts.map(|i| format!("L{}", matching::line_of(text, i))).collect();
-    format!("{tag}{} matches at {}: add context or set all=true", at.len(), at.join(","))
+    format!("{tag}old matches {} places ({}); add surrounding lines to old so it matches once, or set all=true to replace every one", at.len(), at.join(","))
 }
 
 fn to_crlf(s: &str) -> String {
@@ -155,7 +159,7 @@ mod tests {
         assert_eq!(call(&mut c, "read_file", json!({"path": "a.rs"})).unwrap(), "unchanged since last read");
 
         let err = call(&mut c, "edit_file", edit("= 1", "= 2")).unwrap_err();
-        assert_eq!(err, "3 matches at L1,L2,L3: add context or set all=true");
+        assert!(err.starts_with("old matches 3 places (L1,L2,L3)") && err.contains("or set all=true"), "{err}");
         assert_eq!(call(&mut c, "edit_file", edit("let b = 1;", "let b = 2;\nlet d = 4;")).unwrap(), "ok L2-3 (+2/-1)");
         // State was refreshed by the edit: a second edit needs no re-read.
         let multi = json!({"path": "a.rs", "edits": [{"old": "= 1", "new": "= 9", "all": true}, {"old": "d", "new": "e"}]});

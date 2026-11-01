@@ -49,10 +49,10 @@ impl Tool for Read {
             return read_one(ctx, path, a.offset, a.limit, true).map(Outcome::Done);
         }
         if a.paths.is_empty() {
-            return Err("path or paths required".into());
+            return Err("give path (one file) or paths (a list of files)".into());
         }
         if a.paths.len() > MAX_PATHS {
-            return Err(format!("at most {MAX_PATHS} paths per call"));
+            return Err(format!("{} paths, at most {MAX_PATHS} per call; split them into several calls", a.paths.len()));
         }
         // One failing file does not hide the others.
         let parts: Vec<String> = a
@@ -78,7 +78,7 @@ pub(super) fn read_one(ctx: &mut Ctx, path: &str, offset: Option<usize>, limit: 
     }
     let start = offset.unwrap_or(1).max(1);
     if total > 0 && start > total {
-        return Err(format!("offset {start} beyond end ({total} lines)"));
+        return Err(format!("offset {start} is past the end of the file ({total} lines); use an offset between 1 and {total}"));
     }
     let end = (start - 1 + limit.unwrap_or(LIMIT).clamp(1, MAX_LIMIT)).min(total);
     // (0, total) stands for the skimmed view in the dedup ranges.
@@ -163,8 +163,8 @@ mod tests {
     fn reads_several_files_in_one_call() {
         let mut c = ctx("read-many", &[("a.rs", "a\n"), ("b.rs", "b\n")]);
         let out = call(&mut c, "read_file", json!({"paths": ["a.rs", "missing.rs", "b.rs"]})).unwrap();
-        assert_eq!(out, "==> a.rs\n1\ta\n\n==> missing.rs\nerror: missing.rs: not found\n==> b.rs\n1\tb\n");
+        assert_eq!(out, "==> a.rs\n1\ta\n\n==> missing.rs\nerror: missing.rs: not found; check the path with list_dir or glob\n==> b.rs\n1\tb\n");
         assert!(c.reads.contains_key(std::path::Path::new("b.rs")));
-        assert!(call(&mut c, "read_file", json!({})).unwrap_err().contains("path or paths"));
+        assert!(call(&mut c, "read_file", json!({})).unwrap_err().contains("give path (one file) or paths"));
     }
 }

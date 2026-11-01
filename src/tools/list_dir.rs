@@ -95,6 +95,6 @@ mod tests {
             let err = call(&mut c, "read_file", json!({"path": "src/hosts"})).unwrap_err();
             assert_eq!(err, "src/hosts: symlink to outside the project, not reachable");
         }
-        assert_eq!(call(&mut c, "read_file", json!({"path": "../x"})).unwrap_err(), "../x: outside project");
+        assert!(call(&mut c, "read_file", json!({"path": "../x"})).unwrap_err().starts_with("../x: outside the project"));
     }
 }
