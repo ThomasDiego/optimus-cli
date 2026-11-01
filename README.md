@@ -9,7 +9,7 @@ Runs on macOS, Linux and Windows. See [Platforms](#platforms) for how far the sa
 ## Highlights
 
 - **Sandboxed by design.** File tools go through a capability handle on the project directory: no `..`, absolute path or symlink can reach outside it. Programs run in a kernel sandbox (Seatbelt on macOS, Landlock and seccomp on Linux) with a cleared environment, resource limits and their own process group.
-- **Secrets never reach the model.** `.env*`, private keys, `.npmrc`, `.netrc`, `.git-credentials` and similar files are blocked for file tools and git everywhere, and for sandboxed programs on macOS.
+- **Secrets never reach the model.** `.env*`, private keys, `.npmrc`, `auth.json`, `.netrc`, `.git-credentials` and similar files are blocked for file tools and git everywhere, and for sandboxed programs on macOS.
 - **Three permission modes.** Confirm everything, auto-apply edits, or run fully autonomous. Network access is confirmed in every mode.
 - **Undo.** Every change, including deleted directories, can be reverted with `/undo`.
 - **Full-screen TUI** with streaming markdown, live tool progress, command suggestions, input history and mouse selection copied to the clipboard. It falls back to a line UI on limited terminals.
@@ -164,7 +164,7 @@ Settings live in `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config
 provider = "openrouter"
 
 # Programs the `run` tool may start, by bare name.
-run_allow = ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make"]
+run_allow = ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make", "php", "composer"]
 
 [providers.openrouter]
 kind = "openai_compat"
@@ -175,6 +175,8 @@ only = ["deepseek"]          # OpenRouter: these upstream providers only, no fal
 ```
 
 Any OpenAI-compatible endpoint works: add a `[providers.<name>]` table and point `provider` at it. On Windows, Python is usually `python` or `py`: add it to `run_allow`.
+
+A config saved before an update keeps its own `run_allow`: add new programs such as `php` and `composer` through `/config`. On macOS, sandboxed programs cannot read `.env`, so `php artisan` runs without it; Laravel tests read `.env.testing` instead, which is not treated as a secret: keep only test values in it. Composer refuses to run next to a project `auth.json` it cannot read: keep its credentials in Composer's global `auth.json`.
 
 The config is checked at startup:
 - `base_url` must use HTTPS, except for a local server, so the key never travels in clear.
@@ -214,6 +216,7 @@ File tools, approvals, secret filtering in file tools and git, the cleared envir
 | Local sockets and pipes (Docker, agents) | denied | denied | allowed |
 | Project secret files, `.git`, `.ai-trash` | denied | readable and writable | readable and writable |
 | Saved API key (`~/.config/ai/.env`) | denied | denied | readable |
+| Composer global `auth.json`, `config.json` | hidden | denied: Composer stops | readable |
 | Servers reachable from the LAN | no | if they bind `0.0.0.0` | if they bind `0.0.0.0` |
 | Process tree killed, CPU limit, no terminal | yes | yes | yes (job object) |
 
