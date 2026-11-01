@@ -34,6 +34,11 @@
   (subpath (string-append (param "HOME") "/.local/lib"))
   (subpath (string-append (param "HOME") "/Library/pnpm"))
   (subpath (string-append (param "HOME") "/Library/Python"))
+  ; PHP from Herd or php.new; Composer's cache. Its home (auth.json) stays unreadable.
+  (subpath (string-append (param "HOME") "/.config/herd-lite"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Herd/bin"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Herd/config/php"))
+  (subpath (string-append (param "HOME") "/Library/Caches/composer"))
   ; Git config and global ignores, read by cargo; credentials stay unreadable.
   (literal (string-append (param "HOME") "/.gitconfig"))
   (subpath (string-append (param "HOME") "/.config/git")))
@@ -41,7 +46,14 @@
   (regex #"/\.cargo/credentials(\.toml)?$")
   (regex #"/\.env$")
   (regex #"/\.env\.[^/]*$"))
-(allow file-read-data (regex #"/\.env\.(example|sample|template)$"))
+(allow file-read-data (regex #"/\.env\.(example|sample|template|testing)$"))
+; Composer's global config and tokens: hidden, not just unreadable, since it
+; aborts on a file it sees but cannot read. Outside ROOT, so never recreated.
+(deny file-read*
+  (literal (string-append (param "HOME") "/.composer/auth.json"))
+  (literal (string-append (param "HOME") "/.composer/config.json"))
+  (literal (string-append (param "HOME") "/.config/composer/auth.json"))
+  (literal (string-append (param "HOME") "/.config/composer/config.json")))
 ; Keys and credential files in the project, as in sandbox::is_secret. Scoped
 ; to ROOT: system CA bundles (/private/etc/ssl/cert.pem) must stay readable.
 (deny file-read-data
@@ -49,7 +61,8 @@
     (require-any
       (regex #"\.(pem|key|p12|pfx)$")
       (regex #"/id_(rsa|ed25519|ecdsa|dsa)[^/]*$")
-      (regex #"/\.(npmrc|pypirc|netrc|git-credentials)$"))))
+      (regex #"/\.(npmrc|pypirc|netrc|git-credentials)$")
+      (regex #"/auth\.json$"))))
 
 ; Writes: project and temp. Package caches only when downloading (NET=1),
 ; so offline commands cannot poison caches shared with other projects.

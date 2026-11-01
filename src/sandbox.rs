@@ -110,10 +110,10 @@ impl Workspace {
 pub fn is_secret(p: &Path) -> bool {
     let Some(name) = p.file_name().and_then(|n| n.to_str()) else { return false };
     let env = name == ".env"
-        || (name.starts_with(".env.") && !matches!(name, ".env.example" | ".env.sample" | ".env.template"));
+        || (name.starts_with(".env.") && !matches!(name, ".env.example" | ".env.sample" | ".env.template" | ".env.testing"));
     env || [".pem", ".key", ".p12", ".pfx"].iter().any(|e| name.ends_with(e))
         || ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"].iter().any(|k| name.starts_with(k))
-        || matches!(name, ".npmrc" | ".pypirc" | ".netrc" | ".git-credentials")
+        || matches!(name, ".npmrc" | ".pypirc" | ".netrc" | ".git-credentials" | "auth.json")
 }
 
 #[cfg(test)]
@@ -158,7 +158,8 @@ pub mod tests {
         assert!(ws.rel(".env").is_err());
         assert!(ws.rel("innocent").is_err());
         assert!(ws.rel(".env.example").is_ok());
-        for p in [".npmrc", "certs/a.p12", "id_rsa.pub", ".git-credentials"] {
+        assert!(ws.rel(".env.testing").is_ok());
+        for p in [".npmrc", "certs/a.p12", "id_rsa.pub", ".git-credentials", "auth.json"] {
             assert!(ws.rel(p).is_err(), "{p} readable");
         }
         assert!(ws.rel("keys.rs").is_ok());

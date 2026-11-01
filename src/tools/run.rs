@@ -20,6 +20,7 @@ const DENIED_SUBCOMMANDS: &[(&str, &[&str])] = &[
     ("bun", &["publish", "x"]),
     ("deno", &["publish", "install"]),
     ("go", &["install"]),
+    ("composer", &["global", "self-update", "selfupdate"]),
 ];
 
 /// Shell habits and the tool that does the job: a direct pointer saves the
@@ -144,15 +145,18 @@ mod tests {
     #[test]
     fn refuses_dangerous_subcommands_only() {
         let mut c = ctx("run-deny", &[]);
-        c.run_allow = ["cargo", "npm", "python3", "node"].map(String::from).to_vec();
+        c.run_allow = ["cargo", "npm", "python3", "node", "php", "composer"].map(String::from).to_vec();
         let run = |c: &mut crate::tools::Ctx, cmd: &str, args: &[&str]| call(c, "run", json!({"cmd": cmd, "args": args}));
         assert!(run(&mut c, "cargo", &["publish"]).unwrap_err().contains("cargo publish is not allowed"));
         assert!(run(&mut c, "cargo", &["+nightly", "install", "x"]).is_err());
         assert!(run(&mut c, "npm", &["exec", "evil"]).is_err());
+        assert!(run(&mut c, "composer", &["global", "require", "x"]).is_err());
         // Inline code is fine: the sandbox, not the flag, is the boundary.
         assert!(run(&mut c, "python3", &["-c", "print(1)"]).is_ok());
         assert!(run(&mut c, "node", &["-e", "1"]).is_ok());
         assert!(run(&mut c, "cargo", &["test", "--", "--nocapture"]).is_ok());
         assert!(run(&mut c, "npm", &["run", "build"]).is_ok());
+        assert!(run(&mut c, "php", &["artisan", "migrate"]).is_ok());
+        assert!(run(&mut c, "composer", &["require", "x"]).is_ok());
     }
 }

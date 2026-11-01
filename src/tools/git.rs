@@ -39,6 +39,7 @@ const SECRET_EXCLUDES: &[&str] = &[
     ":(exclude,glob)**/.pypirc",
     ":(exclude,glob)**/.netrc",
     ":(exclude,glob)**/.git-credentials",
+    ":(exclude,glob)**/auth.json",
 ];
 
 pub struct Git;

@@ -43,6 +43,7 @@ const SYSTEM: &[&str] = &[
 const HOME_READ: &[&str] = &[
     ".cargo/bin", ".cargo/registry", ".cargo/git", ".cargo/config.toml", ".cargo/config", ".rustup", ".npm", ".nvm",
     ".bun", ".deno", ".pyenv", "go", ".local/bin", ".local/lib", ".local/share/pnpm", ".gitconfig", ".config/git",
+    ".config/herd-lite", ".cache/composer",
 ];
 /// Writable only when downloading, so offline commands cannot poison caches
 /// shared with other projects.

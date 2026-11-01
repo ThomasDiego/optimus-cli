@@ -182,7 +182,7 @@ mod tests {
         let env = run(&exec("/bin/cat", &[".env"], &root, 5), &root).await.unwrap();
         assert!(!env.contains("KEY=1"), "{env}");
         std::fs::create_dir(root.join("certs")).unwrap();
-        for f in ["certs/server.key", ".npmrc", "id_ed25519"] {
+        for f in ["certs/server.key", ".npmrc", "id_ed25519", "auth.json"] {
             std::fs::write(root.join(f), "SECRET").unwrap();
             let out = run(&exec("/bin/cat", &[f], &root, 5), &root).await.unwrap();
             assert!(!out.contains("SECRET"), "{f}: {out}");
