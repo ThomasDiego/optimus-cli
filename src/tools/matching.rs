@@ -64,7 +64,7 @@ pub fn closest(text: &str, old: &str) -> String {
         .enumerate()
         .map(|(k, l)| format!("{}\t{l}\n", at + k + 1))
         .collect();
-    format!("; closest:\n{shown}")
+    format!("; closest text in the file, copy old from it exactly:\n{shown}")
 }
 
 #[cfg(test)]

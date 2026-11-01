@@ -32,7 +32,7 @@ pub struct Config {
 }
 
 fn default_run_allow() -> Vec<String> {
-    ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make", "php", "composer"]
+    ["cargo", "rustc", "rustfmt", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "python3", "pytest", "go", "make", "php", "composer", "laravel"]
         .map(String::from)
         .to_vec()
 }

@@ -60,7 +60,7 @@ impl Jobs {
     /// Starts `ex` and returns once it settled: its first output, or its exit.
     pub async fn start(&mut self, ex: &Exec, root: &Path) -> Result<String, String> {
         if self.running() >= MAX_JOBS {
-            return Err(format!("{MAX_JOBS} background jobs already running; stop one first"));
+            return Err(format!("{MAX_JOBS} background jobs already running; process stop one (ids: process status), then run again"));
         }
         let (mut child, group) = exec::spawn(ex, root)?;
         let log = Arc::new(Mutex::new(Log::default()));
@@ -100,7 +100,7 @@ impl Jobs {
     /// Waits up to `secs` for the job to exit, then shows its new output:
     /// follows a long command without a tool call per poll.
     pub async fn wait(&mut self, id: usize, secs: u64) -> Result<String, String> {
-        let job = self.list.iter().find(|j| j.id == id).ok_or_else(|| format!("no job {id}"))?;
+        let job = self.list.iter().find(|j| j.id == id).ok_or_else(|| format!("no job {id}; see process status for the ids"))?;
         let deadline = Instant::now() + Duration::from_secs(secs.min(MAX_WAIT));
         while job.state().is_none() && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -118,7 +118,7 @@ impl Jobs {
 
     /// State, then the lines the model has not seen yet.
     pub fn output(&mut self, id: usize) -> Result<String, String> {
-        let job = self.list.iter_mut().find(|j| j.id == id).ok_or_else(|| format!("no job {id}; see process status"))?;
+        let job = self.list.iter_mut().find(|j| j.id == id).ok_or_else(|| format!("no job {id}; see process status for the ids"))?;
         let mut out = job.header();
         let log = job.log.lock().unwrap();
         let first = log.total - log.lines.len();

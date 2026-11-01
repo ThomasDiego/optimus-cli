@@ -45,7 +45,7 @@ impl Tool for Delete {
         list.sort();
         list.dedup();
         if list.is_empty() || list.len() > MAX_PATHS {
-            return Err(format!("give path or 1 to {MAX_PATHS} paths"));
+            return Err(format!("give path (one file) or paths (a list of 1 to {MAX_PATHS})"));
         }
         let (mut files, mut dirs, mut done, mut skipped) = (vec![], vec![], vec![], vec![]);
         for p in &list {

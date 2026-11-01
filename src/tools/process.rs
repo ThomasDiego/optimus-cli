@@ -41,7 +41,7 @@ impl Tool for Process {
 
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
-        let id = || a.id.ok_or("id required");
+        let id = || a.id.ok_or("id required: use the job id from run background=true or from process status");
         let out = match a.op {
             Op::Status => ctx.jobs.status(),
             Op::Output if a.wait.is_some_and(|w| w > 0) => return Ok(Outcome::Wait { id: id()?, secs: a.wait.unwrap_or(0) }),

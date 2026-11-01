@@ -114,8 +114,8 @@ impl Tool for Git {
         let a: Args = parse(args)?;
         // A parent repository is out of the sandbox's reach anyway.
         match (matches!(a.op, Op::Init), ctx.ws.dir.is_dir(".git")) {
-            (false, false) => return Err("not a git repository; init creates one".into()),
-            (true, true) => return Err("already a git repository".into()),
+            (false, false) => return Err(r#"this project is not a git repository; call git with op "init" to create one"#.into()),
+            (true, true) => return Err("already a git repository, nothing to init".into()),
             _ => {}
         }
         // Pathspecs go to git as text, so `..` is refused here rather than at I/O.
@@ -123,7 +123,7 @@ impl Tool for Git {
             .paths
             .iter()
             .map(|p| match ctx.ws.rel_write(p)? {
-                r if r.components().any(|c| matches!(c, std::path::Component::ParentDir)) => Err(format!("{p}: .. not allowed")),
+                r if r.components().any(|c| matches!(c, std::path::Component::ParentDir)) => Err(format!("{p}: .. is not allowed; give paths relative to the project root")),
                 r => Ok(r.display().to_string()),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -166,13 +166,13 @@ impl Tool for Git {
                 ["add", "-A", "--", "."].iter().chain(SECRET_EXCLUDES).for_each(|s| push(s));
                 Review::Write
             }
-            Op::Add if paths.is_empty() => return Err("add needs paths or all=true".into()),
+            Op::Add if paths.is_empty() => return Err("op add needs paths (a list of files) or all=true".into()),
             Op::Add => {
                 push("add");
                 Review::Write
             }
             Op::Commit => {
-                let msg = a.message.as_deref().map(str::trim).filter(|m| !m.is_empty()).ok_or("commit needs a message")?;
+                let msg = a.message.as_deref().map(str::trim).filter(|m| !m.is_empty()).ok_or("op commit needs a non-empty message (the commit message)")?;
                 ["commit", "-m", msg].iter().for_each(|s| push(s));
                 Review::Write
             }
@@ -187,7 +187,7 @@ impl Tool for Git {
                 }
             },
             Op::Switch => {
-                let name = safe_name(a.name.as_deref().ok_or("switch needs a name")?)?;
+                let name = safe_name(a.name.as_deref().ok_or("op switch needs name (the branch to go to; create=true for a new one)")?)?;
                 push("switch");
                 if a.create {
                     push("-c");
@@ -195,7 +195,7 @@ impl Tool for Git {
                 push(name);
                 Review::Write
             }
-            Op::Restore if paths.is_empty() => return Err("restore needs paths".into()),
+            Op::Restore if paths.is_empty() => return Err("op restore needs paths (the files to restore)".into()),
             Op::Restore => {
                 push("restore");
                 if a.staged {
@@ -225,7 +225,7 @@ impl Tool for Git {
             }
             // No editor can open: commands have no tty.
             Op::Revert | Op::CherryPick => {
-                let rev = safe_name(a.rev.as_deref().ok_or("needs rev")?)?;
+                let rev = safe_name(a.rev.as_deref().ok_or("this op needs rev (the commit hash or name, see git log)")?)?;
                 let op = if matches!(a.op, Op::Revert) { "revert" } else { "cherry-pick" };
                 [op, "--no-edit", rev].iter().for_each(|s| push(s));
                 Review::Write
@@ -273,7 +273,7 @@ fn safe_name(s: &str) -> Result<&str, String> {
         && s.len() <= 200
         && !s.starts_with('-')
         && s.chars().all(|c| c.is_ascii_alphanumeric() || "._/@{}~^-".contains(c));
-    if ok { Ok(s) } else { Err(format!("invalid name or revision: {s}")) }
+    if ok { Ok(s) } else { Err(format!("invalid name or revision {s:?}; use letters, digits and . _ / @ ~ ^ - only, not starting with -")) }
 }
 
 #[cfg(test)]
@@ -294,10 +294,10 @@ mod tests {
     #[test]
     fn builds_fixed_commands_and_rejects_injection() {
         let mut c = ctx("git", &[("a.rs", "")]);
-        assert!(plan(&mut c, json!({"op": "status"})).unwrap_err().starts_with("not a git repository"));
+        assert!(plan(&mut c, json!({"op": "status"})).unwrap_err().starts_with("this project is not a git repository"));
         assert_eq!(plan(&mut c, json!({"op": "init"})).unwrap(), ("init -q".into(), true));
         std::fs::create_dir(c.ws.root.join(".git")).unwrap();
-        assert_eq!(plan(&mut c, json!({"op": "init"})).unwrap_err(), "already a git repository");
+        assert_eq!(plan(&mut c, json!({"op": "init"})).unwrap_err(), "already a git repository, nothing to init");
         assert_eq!(plan(&mut c, json!({"op": "uncommit"})).unwrap(), ("reset --soft HEAD~1".into(), true));
         assert_eq!(plan(&mut c, json!({"op": "stash", "message": "wip"})).unwrap().0, "stash push -m wip");
         assert_eq!(plan(&mut c, json!({"op": "status"})).unwrap(), ("status --short --branch".into(), false));

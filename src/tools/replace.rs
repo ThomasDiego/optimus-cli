@@ -48,7 +48,7 @@ impl Tool for Replace {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         if a.old.is_empty() || a.old == a.new {
-            return Err("old must be non-empty and differ from new".into());
+            return Err("old must be non-empty and different from new; give the text to find in old and its replacement in new".into());
         }
         let re = match a.regex {
             true => Some(RegexMatcherBuilder::new().multi_line(true).word(a.word).build(&a.old).map_err(|e| format!("invalid regex: {e}"))?),
@@ -70,10 +70,10 @@ impl Tool for Replace {
             }
         }
         if changes.is_empty() {
-            return Err(format!("no match for {:?}", a.old));
+            return Err(format!("no match for {:?} in any file; nothing changed. Check it with grep, or narrow/widen glob", a.old));
         }
         if changes.len() > MAX_FILES {
-            return Err(format!("{} files match; narrow glob (max {MAX_FILES})", changes.len()));
+            return Err(format!("{} files match, more than the {MAX_FILES} allowed; nothing changed. Set a narrower glob (e.g. \"src/**/*.rs\") and call again", changes.len()));
         }
         let mut names: Vec<String> = changes.iter().take(LISTED).map(|c| c.rel.display().to_string()).collect();
         if changes.len() > LISTED {

@@ -20,8 +20,8 @@ pub fn hash(data: &[u8]) -> u64 {
 
 pub fn io_err(path: &str, e: io::Error) -> String {
     match e.kind() {
-        io::ErrorKind::NotFound => format!("{path}: not found"),
-        io::ErrorKind::PermissionDenied => format!("{path}: outside project or permission denied"),
+        io::ErrorKind::NotFound => format!("{path}: not found; check the path with list_dir or glob"),
+        io::ErrorKind::PermissionDenied => format!("{path}: permission denied or outside the project; do not retry, tell the user"),
         _ => format!("{path}: {e}"),
     }
 }
@@ -40,10 +40,10 @@ pub fn read_bytes(ctx: &Ctx, rel: &Path, shown: &str) -> Result<Vec<u8>, String>
         return Err(format!("{shown}: directory, use list_dir"));
     }
     if meta.file_type().is_symlink() {
-        return Err(format!("{shown}: symlink, not supported"));
+        return Err(format!("{shown}: symlink, not supported; use the path of its target"));
     }
     if meta.len() > MAX_BYTES {
-        return Err(format!("{shown}: too large ({} KB)", meta.len() / 1024));
+        return Err(format!("{shown}: too large ({} KB) for file tools; search it with grep", meta.len() / 1024));
     }
     ctx.ws.dir.read(rel).map_err(|e| io_err(shown, e))
 }
@@ -95,8 +95,8 @@ pub fn ensure_fresh(ctx: &mut Ctx, rel: &Path, current: &str, shown: &str) -> Re
         Some(_) => return Ok(()),
     };
     match super::read::read_one(ctx, shown, None, None, false) {
-        Ok(view) => Err(format!("{shown}: {why}; retry against its current content:\n{view}")),
-        Err(_) => Err(format!("{shown}: {why}, read it first")),
+        Ok(view) => Err(format!("{shown}: {why}; nothing was written. Its current content is below, repeat this call against it:\n{view}")),
+        Err(_) => Err(format!("{shown}: {why}; read_file it first, then repeat this call")),
     }
 }
 

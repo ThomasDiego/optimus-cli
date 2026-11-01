@@ -109,7 +109,10 @@ impl<P: Provider> Agent<P> {
     }
 
     async fn execute(&self, ctx: &mut Ctx, call: &ToolCall) -> Result<String, String> {
-        let i = self.defs.iter().position(|d| d.name == call.name).ok_or_else(|| format!("unknown tool {}", call.name))?;
+        let i = self.defs.iter().position(|d| d.name == call.name).ok_or_else(|| {
+            let names: Vec<&str> = self.defs.iter().map(|d| d.name).collect();
+            format!("unknown tool {}; call one of: {}", call.name, names.join(", "))
+        })?;
         match self.tools[i].run(ctx, &call.args)? {
             Outcome::Done(out) => Ok(out),
             Outcome::Write(batch) => {

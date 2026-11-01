@@ -52,16 +52,16 @@ impl Tool for Move {
         let single = a.from.zip(a.to).map(|(from, to)| Pair { from, to });
         let pairs: Vec<Pair> = single.into_iter().chain(a.moves).collect();
         if pairs.is_empty() || pairs.len() > MAX_MOVES {
-            return Err(format!(r#"expected {{"from", "to"}} or {{"moves": [{{"from", "to"}}]}}, at most {MAX_MOVES} moves"#));
+            return Err(format!(r#"give from and to (one move), or moves: [{{"from": "a", "to": "b"}}] with 1 to {MAX_MOVES} moves"#));
         }
         let (mut changes, mut gone, mut dests, mut done) = (vec![], HashSet::new(), vec![], vec![]);
         for p in &pairs {
             let (from, to) = (ctx.ws.rel_write(&p.from)?, ctx.ws.rel_write(&p.to)?);
             if ctx.ws.dir.try_exists(&to).map_err(|e| file::io_err(&p.to, e))? {
-                return Err(format!("{}: exists; delete it first or pick another name", p.to));
+                return Err(format!("{}: already exists, nothing was moved; delete_file it first or pick another name in to", p.to));
             }
             if gone.contains(&from) || dests.contains(&to) || gone.contains(&to) || dests.contains(&from) {
-                return Err(format!("{} → {}: each path may appear once", p.from, p.to));
+                return Err(format!("{} → {}: a path appears in two moves of this call; split them into separate calls", p.from, p.to));
             }
             let bytes = file::read_bytes(ctx, &from, &p.from)?;
             changes.push(Change { rel: to.clone(), old: None, new: Some(bytes.clone()), kind: Kind::File });
@@ -134,7 +134,7 @@ mod tests {
     fn refuses_conflicting_moves_atomically() {
         let mut c = ctx("mv-guard", &[("a.rs", "a"), ("b.rs", "b")]);
         let twice = json!({"moves": [{"from": "a.rs", "to": "x.rs"}, {"from": "b.rs", "to": "x.rs"}]});
-        assert!(call(&mut c, "move_file", twice).unwrap_err().contains("once"));
+        assert!(call(&mut c, "move_file", twice).unwrap_err().contains("in two moves"));
         let chain = json!({"moves": [{"from": "a.rs", "to": "c.rs"}, {"from": "c.rs", "to": "d.rs"}]});
         assert!(call(&mut c, "move_file", chain).is_err());
         assert!(call(&mut c, "move_file", json!({"moves": [{"from": "a.rs", "to": "../x"}]})).is_err());

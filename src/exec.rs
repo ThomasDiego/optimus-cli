@@ -58,9 +58,54 @@ pub async fn run(ex: &Exec, root: &Path) -> Result<String, String> {
     // On timeout, cancel or exit, `_group` kills every remaining process.
     let out = match tokio::time::timeout(ex.timeout, child.wait_with_output()).await {
         Ok(r) => r.map_err(|e| format!("{}: {e}", ex.program))?,
-        Err(_) => return Err(format!("timeout after {}s, process killed", ex.timeout.as_secs())),
+        Err(_) => {
+            let advice = if ex.git { "" } else { "; for a server or a long job call run again with background=true, else with a larger timeout (max 600)" };
+            return Err(format!("timeout after {}s, process killed{advice}", ex.timeout.as_secs()));
+        }
     };
-    Ok(warned(format_output(out.status.code(), start.elapsed(), &out.stdout, &out.stderr)))
+    let code = out.status.code();
+    let mut text = format_output(code, start.elapsed(), &out.stdout, &out.stderr);
+    if let Some(hint) = failure_hint(ex, code, &text) {
+        text.push_str(&format!("\n[hint: {hint}]"));
+    }
+    Ok(warned(text))
+}
+
+/// Output fragments of a command that tried to download while the network was off.
+const OFFLINE: &[&str] = &[
+    "could not resolve host",
+    "getaddrinfo",
+    "enotfound",
+    "network is unreachable",
+    "name resolution",
+    "failed to lookup address",
+    "offline was specified",
+    "curl error 6",
+    "curl error 7",
+];
+
+/// What a failed command's output does not say outright, spelled out for models
+/// that cannot infer it from a sandbox message.
+fn failure_hint(ex: &Exec, code: Option<i32>, output: &str) -> Option<&'static str> {
+    if code == Some(0) {
+        return None;
+    }
+    let lower = output.to_lowercase();
+    if lower.contains("execvp() of") && lower.contains("no such file") {
+        return Some("program not installed or not on PATH; do not look for it elsewhere, tell the user");
+    }
+    if !ex.net && OFFLINE.iter().any(|m| lower.contains(m)) {
+        return Some("network is off for this call; if the command must download, call run again with net=true (the user is asked to approve)");
+    }
+    None
+}
+
+/// A program that cannot start: the common cause gets a plain sentence.
+fn spawn_error(program: &str, e: std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => format!("{program}: not installed or not on PATH; do not look for it elsewhere, tell the user"),
+        _ => format!("{program}: {e}"),
+    }
 }
 
 /// Prefixes output with the reason commands run unsandboxed, if they do.
@@ -87,7 +132,7 @@ pub fn spawn(ex: &Exec, root: &Path) -> Result<(Child, Group), String> {
         }
     }
     cmd.envs(ex.env.iter().copied());
-    let child = cmd.spawn().map_err(|e| format!("{}: {e}", ex.program))?;
+    let child = cmd.spawn().map_err(|e| spawn_error(&ex.program, e))?;
     let group = Group::attach(&child).map_err(|e| format!("{}: {e}", ex.program))?;
     Ok((child, group))
 }
@@ -162,6 +207,24 @@ mod tests {
         let root = crate::sandbox::tests::temp("exec-timeout").canonicalize().unwrap();
         let err = run(&exec("/bin/sleep", &["5"], &root, 1), &root).await.unwrap_err();
         assert!(err.starts_with("timeout"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failures_say_what_to_do() {
+        let root = crate::sandbox::tests::temp("exec-hints").canonicalize().unwrap();
+        // Spawn error on Linux, `sandbox-exec` exit on macOS: same advice.
+        let missing = run(&exec("ai-no-such-program", &[], &root, 5), &root).await;
+        let text = missing.unwrap_or_else(|e| e);
+        assert!(text.contains("not installed or not on PATH"), "{text}");
+
+        let dns = ["-c", "echo 'curl error 6: Could not resolve host: repo.packagist.org' >&2; exit 1"];
+        let offline = run(&exec("/bin/sh", &dns, &root, 5), &root).await.unwrap();
+        assert!(offline.contains("call run again with net=true"), "{offline}");
+        let online = run(&Exec { net: true, ..exec("/bin/sh", &dns, &root, 5) }, &root).await.unwrap();
+        assert!(!online.contains("[hint"), "{online}");
+        let fine = run(&exec("/bin/sh", &["-c", "echo getaddrinfo"], &root, 5), &root).await.unwrap();
+        assert!(!fine.contains("[hint"), "{fine}");
     }
 
     #[cfg(target_os = "macos")]

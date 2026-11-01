@@ -60,7 +60,7 @@ fn denied(cmd: &str, args: &[String]) -> Option<String> {
     let lookup = |table: &[(&str, &'static [&'static str])]| table.iter().find(|(p, _)| *p == cmd).map(|(_, l)| *l).unwrap_or(&[]);
     let sub = args.iter().find(|a| !a.starts_with('-') && !a.starts_with('+'));
     if let Some(sub) = sub.filter(|s| lookup(DENIED_SUBCOMMANDS).contains(&s.as_str())) {
-        return Some(format!("{cmd} {sub} is not allowed (publishing, credentials or remote code)"));
+        return Some(format!("{cmd} {sub} is not allowed (publishing, credentials or remote code); do not retry or find another way, tell the user"));
     }
     None
 }
@@ -88,16 +88,21 @@ impl Tool for Run {
     fn run(&self, ctx: &mut Ctx, args: &str) -> Result<Outcome, String> {
         let a: Args = parse(args)?;
         if a.cmd.contains(char::is_whitespace) {
-            return Err("cmd is the program name only; put arguments in args".into());
+            return Err(r#"cmd is the program name only; put the rest in args, e.g. {"cmd": "cargo", "args": ["test", "--lib"]}"#.into());
         }
         if let Some((_, tool)) = SHELL_TOOLS.iter().find(|(cmd, _)| cmd.split(' ').any(|c| c == a.cmd)) {
-            return Err(format!("no shell commands; use {tool}"));
+            return Err(format!("{} is a shell command and run has no shell; use {tool} instead", a.cmd));
         }
         if a.cmd.contains(['/', '\\']) {
-            return Err("programs run by name only; run build outputs through their tool (cargo run, npm run…)".into());
+            return Err(r#"cmd is a program name, not a path (no / or \); run build outputs through their tool (cargo run, npm run…)"#.into());
         }
         if !ctx.run_allow.contains(&a.cmd) {
-            return Err(format!("{} not allowed; allowed: {}", a.cmd, ctx.run_allow.join(", ")));
+            return Err(format!(
+                "{} is not an allowed program; allowed: {}. Use one of them, or tell the user to add {} in /config",
+                a.cmd,
+                ctx.run_allow.join(", "),
+                a.cmd
+            ));
         }
         if let Some(reason) = denied(&a.cmd, &a.args) {
             return Err(reason);
@@ -121,11 +126,11 @@ mod tests {
     fn validates_program_and_dir() {
         let mut c = ctx("run", &[]);
         assert_eq!(call(&mut c, "run", json!({"cmd": "cargo", "args": ["test"]})).unwrap(), r#"exec cargo ["test"]"#);
-        assert!(call(&mut c, "run", json!({"cmd": "cargo test"})).unwrap_err().contains("put arguments in args"));
-        assert!(call(&mut c, "run", json!({"cmd": "bash"})).unwrap_err().contains("not allowed; allowed: cargo"));
-        assert_eq!(call(&mut c, "run", json!({"cmd": "ls"})).unwrap_err(), "no shell commands; use list_dir");
+        assert!(call(&mut c, "run", json!({"cmd": "cargo test"})).unwrap_err().contains("put the rest in args"));
+        assert!(call(&mut c, "run", json!({"cmd": "bash"})).unwrap_err().contains("not an allowed program; allowed: cargo"));
+        assert_eq!(call(&mut c, "run", json!({"cmd": "ls"})).unwrap_err(), "ls is a shell command and run has no shell; use list_dir instead");
         assert!(call(&mut c, "run", json!({"cmd": "curl"})).unwrap_err().contains("nothing can be sent"));
-        assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).unwrap_err().contains("by name only"));
+        assert!(call(&mut c, "run", json!({"cmd": "/usr/bin/cargo"})).unwrap_err().contains("not a path"));
         assert!(call(&mut c, "run", json!({"cmd": "./target/debug/demo"})).unwrap_err().contains("cargo run"));
         assert!(call(&mut c, "run", json!({"cmd": "cargo", "dir": ".."})).is_err());
     }
