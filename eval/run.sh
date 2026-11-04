@@ -7,7 +7,7 @@
 # runs in the project first (its parent dir is the task's "outside").
 set -u
 export EVAL=${0:A:h}
-AI=${EVAL:h}/target/release/ai
+AI=${EVAL:h}/target/release/optimus
 RUNS=${RUNS:-$HOME/.ai-eval-runs}
 OUT=$EVAL/results
 JOBS=${JOBS:-4}

@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
         Ok(p) => (p, None),
         Err(e) => (OpenAiCompat::new("https://unconfigured.invalid", String::new(), String::new(), vec![]), Some(e)),
     };
-    let unusable = |e: &str| anyhow!("{e}: run `ai` in a terminal to set it up");
+    let unusable = |e: &str| anyhow!("{e}: run `optimus` in a terminal to set it up");
 
     let ws = Workspace::open(std::env::current_dir()?)?;
     let header = format!("{model} · {}", ws.root.display());

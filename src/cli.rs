@@ -2,7 +2,7 @@ use std::io::Read;
 
 use crate::permission::Mode;
 
-const USAGE: &str = "usage: ai [-p <prompt>|-] [--mode ask|edit|auto]
+const USAGE: &str = "usage: optimus [-p <prompt>|-] [--mode ask|edit|auto]
 
   no -p     interactive UI
   -p        one turn without UI; answer on stdout, progress on stderr

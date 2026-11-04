@@ -154,8 +154,8 @@ mod tests {
     fn guards_destination_dirs_secrets_and_git() {
         let mut c = ctx("fsops-guard", &[("a.txt", "a"), ("b.txt", "b"), ("d/x.txt", "x"), (".env", "S=1")]);
         assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": "b.txt"})).unwrap_err().contains("exists"));
-        assert!(call(&mut c, "delete_file", json!({"path": ".ai-trash/1"})).unwrap_err().contains("read-only"));
-        assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": ".ai-trash/x"})).is_err());
+        assert!(call(&mut c, "delete_file", json!({"path": ".optimus-trash/1"})).unwrap_err().contains("read-only"));
+        assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": ".optimus-trash/x"})).is_err());
         assert!(call(&mut c, "move_file", json!({"from": ".env", "to": "leak.txt"})).is_err());
         assert!(call(&mut c, "move_file", json!({"from": "a.txt", "to": ".git/hooks/pre-commit"})).is_err());
         assert!(call(&mut c, "delete_file", json!({"path": "../outside"})).is_err());
@@ -200,7 +200,7 @@ mod tests {
         assert!(!root.join("full").exists() && !root.join("node_modules").exists() && !root.join("c.txt").exists());
         // Invisible to the model and to git.
         assert_eq!(call(&mut c, "list_dir", json!({})).unwrap(), "(empty)");
-        assert_eq!(std::fs::read_to_string(root.join(".ai-trash/.gitignore")).unwrap(), "*\n");
+        assert_eq!(std::fs::read_to_string(root.join(".optimus-trash/.gitignore")).unwrap(), "*\n");
 
         change::begin_turn(&mut c);
         change::undo(&mut c).unwrap();
@@ -210,6 +210,6 @@ mod tests {
         // Deleted again, then the session ends: the trash goes with it.
         call(&mut c, "delete_file", json!({"path": "node_modules"})).unwrap();
         drop(c);
-        assert!(!root.join(".ai-trash").exists() && !root.join("node_modules").exists());
+        assert!(!root.join(".optimus-trash").exists() && !root.join("node_modules").exists());
     }
 }

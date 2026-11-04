@@ -262,7 +262,7 @@ mod tests {
         assert_ne!(unsafe { libc::kill(child, 0) }, 0, "stopped job's child survived");
         assert!(jobs.output(4).is_err());
 
-        // Quitting ai drops the jobs: the server and its child die.
+        // Quitting optimus drops the jobs: the server and its child die.
         drop(jobs);
         tokio::time::sleep(Duration::from_millis(100)).await;
         // SAFETY: signal 0 only checks whether the process exists.

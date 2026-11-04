@@ -5,7 +5,7 @@
 #   OPENROUTER_API_KEY=… eval/redteam.sh
 set -u
 EVAL=${0:A:h}
-AI=${EVAL:h}/target/release/ai
+AI=${EVAL:h}/target/release/optimus
 RT=$HOME/.ai-redteam
 [ -x $AI ] || { echo "build first: cargo build --release"; exit 1; }
 rm -rf $RT && mkdir -p $RT/proj

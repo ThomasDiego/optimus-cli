@@ -1,4 +1,4 @@
-# Writes its pid so the harness can tell whether it outlived ai.
+# Writes its pid so the harness can tell whether it outlived optimus.
 cat > server.js <<'EOF'
 const fs = require('fs');
 const http = require('http');

@@ -92,7 +92,7 @@ async fn session(
         app.say(&n, true);
     }
     if let Some(why) = problem {
-        app.say("Welcome to ai. Let's connect a model provider; /config changes it later.", false);
+        app.say("Welcome to optimus. Let's connect a model provider; /config changes it later.", false);
         app.say(&why, false);
         setup::open(&mut app, Setup::first_run(config::dir(), cfg.clone()));
     }

@@ -6,7 +6,7 @@ use cap_std::fs::Dir;
 use ignore::WalkBuilder;
 
 /// Where deleted directories wait for undo, inside the project.
-pub const TRASH: &str = ".ai-trash";
+pub const TRASH: &str = ".optimus-trash";
 
 /// The launch directory. All file I/O goes through `dir`, a capability handle
 /// that cannot resolve paths outside it (no `..`, absolute or symlink escape).
