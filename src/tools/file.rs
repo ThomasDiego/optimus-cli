@@ -122,7 +122,7 @@ pub fn write_atomic(dir: &Dir, rel: &Path, data: &[u8]) -> io::Result<()> {
     if !parent.as_os_str().is_empty() {
         dir.create_dir_all(parent)?;
     }
-    let tmp = parent.join(format!(".{}.ai-tmp", name.to_string_lossy()));
+    let tmp = parent.join(format!(".{}.optimus-tmp", name.to_string_lossy()));
     let perms = dir.metadata(rel).ok().map(|m| m.permissions());
     dir.write(&tmp, data)?;
     if let Some(p) = perms {

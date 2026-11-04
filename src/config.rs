@@ -126,7 +126,7 @@ pub fn parse_programs(input: &str) -> Result<Vec<String>, String> {
 
 /// Where config.toml and the key file live.
 pub fn dir() -> PathBuf {
-    crate::os::config_dir().join("ai")
+    crate::os::config_dir().join("optimus")
 }
 
 /// The defaults when there is no file yet.
@@ -146,7 +146,7 @@ pub fn save(dir: &Path, cfg: &Config) -> io::Result<()> {
     if std::fs::read_to_string(&path).is_ok_and(|t| toml::from_str::<Config>(&t).is_err()) {
         std::fs::copy(&path, dir.join("config.toml.bak"))?;
     }
-    let text = format!("# Managed by ai: change it with /config.\n{}", toml::to_string(cfg).map_err(io::Error::other)?);
+    let text = format!("# Managed by optimus: change it with /config.\n{}", toml::to_string(cfg).map_err(io::Error::other)?);
     write_file(&path, text.as_bytes(), false)
 }
 

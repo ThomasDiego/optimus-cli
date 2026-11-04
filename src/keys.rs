@@ -1,4 +1,4 @@
-//! API keys typed in /config, kept out of config.toml in `<config dir>/ai/.env`:
+//! API keys typed in /config, kept out of config.toml in `<config dir>/optimus/.env`:
 //! readable by the user only, and named like the secret files every tool and
 //! sandbox already refuses. The environment variable is the fallback.
 

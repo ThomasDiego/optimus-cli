@@ -40,7 +40,7 @@ pub const PRESETS: &[Preset] = &[
         model: "deepseek-chat",
         keys_url: "https://platform.deepseek.com/api_keys",
     },
-    Preset { id: "custom", label: "Other OpenAI-compatible API (Ollama, Mistral…)", base_url: "", key_env: "AI_API_KEY", model: "", keys_url: "" },
+    Preset { id: "custom", label: "Other OpenAI-compatible API (Ollama, Mistral…)", base_url: "", key_env: "OPTIMUS_API_KEY", model: "", keys_url: "" },
 ];
 
 impl Preset {

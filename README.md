@@ -1,8 +1,8 @@
-# ai
+# optimus
 
 A small, fast coding agent for your terminal, written in Rust.
 
-`ai` works inside the directory you launch it from, and only there. It has no shell: it reads, edits and searches files through its own tools, and starts programs from an allowlist inside an OS sandbox with no network by default. Data can leave your machine through the network alone, and every network access needs your approval.
+`optimus` works inside the directory you launch it from, and only there. It has no shell: it reads, edits and searches files through its own tools, and starts programs from an allowlist inside an OS sandbox with no network by default. Data can leave your machine through the network alone, and every network access needs your approval.
 
 Runs on macOS, Linux and Windows. See [Platforms](#platforms) for how far the sandbox goes on each.
 
@@ -19,15 +19,15 @@ Runs on macOS, Linux and Windows. See [Platforms](#platforms) for how far the sa
 
 ## Install
 
-`ai` builds from source with a recent Rust toolchain (edition 2024) and a C compiler. `cargo install` puts the binary in `~/.cargo/bin`, which rustup adds to your `PATH`.
+`optimus` builds from source with a recent Rust toolchain (edition 2024) and a C compiler. `cargo install` puts the binary in `~/.cargo/bin`, which rustup adds to your `PATH`.
 
 ### macOS
 
 ```sh
 xcode-select --install                                           # C compiler and git
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
-git clone https://github.com/ThomasDiego/ai-cli.git
-cd ai-cli
+git clone https://github.com/ThomasDiego/optimus-cli.git
+cd optimus-cli
 cargo install --path . --locked
 ```
 
@@ -38,12 +38,12 @@ sudo apt install build-essential git        # Debian, Ubuntu
 # sudo dnf install gcc git                  # Fedora
 # sudo pacman -S base-devel git             # Arch
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-git clone https://github.com/ThomasDiego/ai-cli.git
-cd ai-cli
+git clone https://github.com/ThomasDiego/optimus-cli.git
+cd optimus-cli
 cargo install --path . --locked
 ```
 
-The sandbox needs Landlock (kernel 5.13 or later, 6.7 or later to block TCP). `cat /sys/kernel/security/lsm` must list `landlock`; without it, `ai` warns in every command result.
+The sandbox needs Landlock (kernel 5.13 or later, 6.7 or later to block TCP). `cat /sys/kernel/security/lsm` must list `landlock`; without it, `optimus` warns in every command result.
 
 ### Windows
 
@@ -54,8 +54,8 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait
 winget install Rustlang.Rustup
 winget install Git.Git
 # Open a new terminal so PATH includes cargo and git.
-git clone https://github.com/ThomasDiego/ai-cli.git
-cd ai-cli
+git clone https://github.com/ThomasDiego/optimus-cli.git
+cd optimus-cli
 cargo install --path . --locked
 ```
 
@@ -63,17 +63,17 @@ cargo install --path . --locked
 
 ```sh
 cd my-project
-ai
+optimus
 ```
 
-The first run asks for a provider (OpenRouter, OpenAI, DeepSeek or any OpenAI-compatible API such as Ollama), an API key and a model. It saves them only once a real request proves that the key works with that model. Change any of them later with `/config`, without leaving `ai`.
+The first run asks for a provider (OpenRouter, OpenAI, DeepSeek or any OpenAI-compatible API such as Ollama), an API key and a model. It saves them only once a real request proves that the key works with that model. Change any of them later with `/config`, without leaving `optimus`.
 
 The default is OpenRouter with `deepseek/deepseek-v4.1-flash-1017`, routed to DeepSeek only.
 
 ## Usage
 
 ```
-ai [-p <prompt>|-] [--mode ask|edit|auto]
+optimus [-p <prompt>|-] [--mode ask|edit|auto]
 ```
 
 | Flag | Meaning |
@@ -86,9 +86,9 @@ ai [-p <prompt>|-] [--mode ask|edit|auto]
 ### Headless examples
 
 ```sh
-ai -p "List every TODO with file and line number"
-git diff | ai -p - --mode ask              # review a diff, read-only
-ai -p "Fix the failing test" --mode auto > answer.md
+optimus -p "List every TODO with file and line number"
+git diff | optimus -p - --mode ask              # review a diff, read-only
+optimus -p "Fix the failing test" --mode auto > answer.md
 ```
 
 Nobody can approve anything in headless mode, so whatever the mode would ask for is denied and reported on stderr. `--mode ask` is therefore read-only, and network access is always denied.
@@ -156,9 +156,9 @@ The model has 14 tools. None of them writes or executes anything itself: each re
 
 ## Configuration
 
-Use `/config` inside `ai`: it shows the current settings and changes one at a time. A new key or model is saved only after a test request succeeds. Wrong keys send you back to the key and unknown models back to the model, with the provider's own error.
+Use `/config` inside `optimus`: it shows the current settings and changes one at a time. A new key or model is saved only after a test request succeeds. Wrong keys send you back to the key and unknown models back to the model, with the provider's own error.
 
-Settings live in `$XDG_CONFIG_HOME/ai/config.toml` (default `~/.config/ai/config.toml`, or `%APPDATA%\ai\config.toml` on Windows). Keys are never stored in it. A key typed in `/config` goes to the `.env` file next to it, readable by you only. Being a `.env` file, it is refused to the model by the file tools, the sandbox and git, like any secret. When that file has no key, `ai` falls back to the environment variable named by `key_env`.
+Settings live in `$XDG_CONFIG_HOME/optimus/config.toml` (default `~/.config/optimus/config.toml`, or `%APPDATA%\optimus\config.toml` on Windows). Keys are never stored in it. A key typed in `/config` goes to the `.env` file next to it, readable by you only. Being a `.env` file, it is refused to the model by the file tools, the sandbox and git, like any secret. When that file has no key, `optimus` falls back to the environment variable named by `key_env`.
 
 ```toml
 provider = "openrouter"
@@ -192,14 +192,14 @@ The config is checked at startup:
 
 ## Security model
 
-`ai` assumes the model can be wrong or manipulated, for example by a prompt injection in a file or web page, and constrains what it can do.
+`optimus` assumes the model can be wrong or manipulated, for example by a prompt injection in a file or web page, and constrains what it can do.
 
 - **No shell, anywhere.** `run` starts programs directly: no pipes, globs, `&&` or redirections.
 - **One reachable directory.** File tools resolve every path through a `cap-std` handle on the launch directory. Nothing outside it can be read or written.
 - **Sandboxed programs (macOS).** `run` wraps programs in a Seatbelt profile (`src/seatbelt.sb`): reads outside the project and toolchains are denied, network and unix sockets are off, and package caches become writable only when you approve network access. The environment is cleared except `PATH`, `HOME`, `USER`, `LANG` and `TMPDIR`. CPU time and file size are limited, and the program runs in its own session, with no controlling terminal and nothing it can inject into yours.
 - **Network is the only way out** (macOS and Linux). Any network access (`run` with `net`, `web_fetch`) needs interactive approval, in every mode. Without it, `cargo` runs offline from its local cache.
 - **Secrets stay hidden.** Secret files are denied by the file tools, by the Seatbelt profile on macOS (which also covers arbitrary `build.rs` code) and are excluded from `git add`.
-- **Undoable deletions.** Deleted directories are parked in `.ai-trash/` until the session ends, so `/undo` can restore them.
+- **Undoable deletions.** Deleted directories are parked in `.optimus-trash/` until the session ends, so `/undo` can restore them.
 - **Contained jobs.** Background jobs die with the session, and on macOS dev servers accept localhost connections only.
 - **No workarounds.** When a tool refuses, the model is told to report it, not to try another route.
 
@@ -214,8 +214,8 @@ File tools, approvals, secret filtering in file tools and git, the cleared envir
 | Reads of `HOME` and outside toolchains | denied | denied | allowed |
 | Network without approval | denied | TCP and UDP denied | allowed |
 | Local sockets and pipes (Docker, agents) | denied | denied | allowed |
-| Project secret files, `.git`, `.ai-trash` | denied | readable and writable | readable and writable |
-| Saved API key (`~/.config/ai/.env`) | denied | denied | readable |
+| Project secret files, `.git`, `.optimus-trash` | denied | readable and writable | readable and writable |
+| Saved API key (`~/.config/optimus/.env`) | denied | denied | readable |
 | Composer global `auth.json`, `config.json` | hidden | denied: Composer stops | readable |
 | Servers reachable from the LAN | no | if they bind `0.0.0.0` | if they bind `0.0.0.0` |
 | Process tree killed, CPU limit, no terminal | yes | yes | yes (job object) |
@@ -236,7 +236,7 @@ Some tests need a terminal; run them under `script -q /dev/null cargo test`.
 
 ### Evaluation suite
 
-`eval/` holds a headless benchmark of about 100 real tasks: refactors, git work, web lookups, background servers, and adversarial cases that try to read secrets, escape the project or leave daemons behind. Each task runs `ai -p … --mode auto` in a fresh copy of `eval/fixture`, then a shell check decides pass or fail. Escapes and surviving daemons are detected separately.
+`eval/` holds a headless benchmark of about 100 real tasks: refactors, git work, web lookups, background servers, and adversarial cases that try to read secrets, escape the project or leave daemons behind. Each task runs `optimus -p … --mode auto` in a fresh copy of `eval/fixture`, then a shell check decides pass or fail. Escapes and surviving daemons are detected separately.
 
 ```sh
 cargo build --release
@@ -270,3 +270,7 @@ src/
 ├── repl.rs            line-mode fallback
 └── headless.rs        -p mode
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -13,7 +13,7 @@ use crate::tools::{self, Ctx, Outcome, Tool, change};
 use crate::ui::{self, Approval, Event};
 
 /// Static on purpose: any dynamic content here would break prompt caching.
-const SYSTEM: &str = "You are ai, a coding agent in the user's project directory. \
+const SYSTEM: &str = "You are optimus, a coding agent in the user's project directory. \
 There is no shell: use the tools; run starts allowed programs directly. \
 Paths are relative to the project root; nothing outside it is reachable. \
 Read only the files the task needs, before editing them: the project overview (files, git status) is enough to orient, never read unrelated files to explore. In a large file, read a range around a line you know (e.g. from an error), else grep with context or read it without a range for its outline. Prefer edit_file and batch edits in one call; the same change in several files is one replace call (regex when parts vary). \

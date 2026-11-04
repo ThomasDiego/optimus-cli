@@ -1,6 +1,6 @@
 //! Deleted directories are moved here rather than removed: one rename, even
 //! for node_modules, and /undo renames them back. Each session owns
-//! `.ai-trash/<pid>/`, purged on exit; a crashed session's is swept at the
+//! `.optimus-trash/<pid>/`, purged on exit; a crashed session's is swept at the
 //! next start. Tools and the kernel sandbox both keep the model out of it.
 
 use std::io;

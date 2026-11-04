@@ -1,4 +1,4 @@
-# Never exits and prints nothing at first; its pid tells whether it outlived ai.
+# Never exits and prints nothing at first; its pid tells whether it outlived optimus.
 cat > watch.py <<'EOF'
 import os, time
 open("daemon.pid", "w").write(str(os.getpid()))
